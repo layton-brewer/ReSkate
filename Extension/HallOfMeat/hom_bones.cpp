@@ -1,4 +1,5 @@
 #include "hom_bones.h"
+#include "hom_art.h"
 #include "Engine/Core/Log/logging.h"
 #include <Windows.h>
 #include <algorithm>
@@ -18,6 +19,7 @@ namespace fs = std::filesystem;
 struct Mesh {
     std::string name;
     std::vector<Vec3f> positions, normals;
+    std::vector<std::array<float, 2>> uvs;
     std::vector<std::uint16_t> indices;
 };
 struct Library {
@@ -103,7 +105,7 @@ void load() {
     const auto read = [&](void *out, std::size_t size) { return static_cast<bool>(in.read(static_cast<char *>(out), static_cast<std::streamsize>(size))); };
     char magic[4]{};
     std::uint32_t count{};
-    if (!read(magic, 4) || std::memcmp(magic, "HOMB", 4) || !read(&count, 4) || count != 19) return;
+    if (!read(magic, 4) || std::memcmp(magic, "HOM2", 4) || !read(&count, 4) || count != 19) return;
     std::vector<Mesh> meshes(count);
     for (auto &m : meshes) {
         std::uint8_t name_length{};
@@ -113,8 +115,9 @@ void load() {
         if (!read(m.name.data(), name_length) || !read(&vertices, 4) || vertices > 65535) return;
         m.positions.resize(vertices);
         m.normals.resize(vertices);
+        m.uvs.resize(vertices);
         for (std::uint32_t i = 0; i < vertices; ++i)
-            if (!read(m.positions[i].data(), 12) || !read(m.normals[i].data(), 12)) return;
+            if (!read(m.positions[i].data(), 12) || !read(m.normals[i].data(), 12) || !read(m.uvs[i].data(), 8)) return;
         if (!read(&indices, 4) || indices > 200000 || indices % 3) return;
         m.indices.resize(indices);
         if (!read(m.indices.data(), indices * 2ULL)) return;
@@ -183,7 +186,7 @@ void draw_hom_bone(ImDrawList *draw, const BoneProjector &projector, std::size_t
             visible[i] = projector.project(world, screen[i], depth[i]);
             // X-ray shading: edges facing away glow brighter than faces toward the camera.
             const float facing = std::abs(dot(normal, projector.view_direction(world)));
-            light[i] = 0.75f + 0.55f * (1.0f - facing);
+            light[i] = 0.82f + 0.3f * (1.0f - facing);
             if (core > 0.0f) {
                 const float d = length(sub(mesh.positions[i], centre_bind)) / half;
                 heat[i] = core * std::clamp(1.0f - d, 0.0f, 1.0f);
@@ -200,8 +203,11 @@ void draw_hom_bone(ImDrawList *draw, const BoneProjector &projector, std::size_t
         }
         std::sort(order.begin(), order.end(), [](const auto &l, const auto &r) { return l.first > r.first; });
         if (order.empty()) return;
-        const auto uv = ImGui::GetFontTexUvWhitePixel();
-        constexpr ImU32 hot = IM_COL32(255, 40, 20, 255);
+        // Skate 3's bone map (marquee_hom diffuse) when it is in the atlas, else flat colour.
+        HomArt map;
+        const bool textured = hom_art("bone_texture", map);
+        const auto white = ImGui::GetFontTexUvWhitePixel();
+        constexpr ImU32 hot = IM_COL32(185, 50, 27, 255);
         for (std::size_t first = 0; first < order.size(); first += 4000) {
             const std::size_t n = std::min<std::size_t>(4000, order.size() - first);
             draw->PrimReserve(static_cast<int>(n * 3), static_cast<int>(n * 3));
@@ -219,6 +225,7 @@ void draw_hom_bone(ImDrawList *draw, const BoneProjector &projector, std::size_t
                         tint = mix(IM_COL32_R_SHIFT) | mix(IM_COL32_G_SHIFT) | mix(IM_COL32_B_SHIFT) | (colour & IM_COL32_A_MASK);
                     }
                     const auto vertex = static_cast<ImDrawIdx>(draw->_VtxCurrentIdx);
+                    const ImVec2 uv = textured ? ImVec2(map.uv0.x + (map.uv1.x - map.uv0.x) * mesh.uvs[i][0], map.uv0.y + (map.uv1.y - map.uv0.y) * mesh.uvs[i][1]) : white;
                     draw->PrimWriteVtx(screen[i], uv, scale_colour(tint, light[i], opacity));
                     draw->PrimWriteIdx(vertex);
                 }

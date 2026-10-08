@@ -318,55 +318,100 @@ void draw_bone(ImDrawList *draw, std::size_t index, ImVec2 a, ImVec2 b, float r,
 
 // The original's X-ray: the world sinks into a dark blue, and only the bones that got hurt show
 // through the body, glowing white, the broken ones orange with a red-hot fracture.
-void draw_xray(ImDrawList *draw, const Result &r, double now, float fade, float darkness) {
+// A dark spotlight on the skater, like the original's HoM vignette: clear around the body, falling
+// to near black at the edges of the screen. Drawn as rings with per-vertex alpha.
+void draw_spotlight(ImDrawList *draw, ImVec2 centre, float strength) {
+    if (strength <= 0.01f) return;
     const auto display = ImGui::GetIO().DisplaySize;
-    if (darkness > 0.01f)
-        draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(4, 8, 26, static_cast<int>(darkness * 255.0f * fade)));
+    const float h = display.y;
+    const float radii[]{0.16f * h, 0.34f * h, 0.62f * h, 1.6f * std::max(display.x, display.y)};
+    const float alphas[]{0.0f, 0.55f, 0.9f, 0.97f};
+    constexpr int segments = 48;
+    const auto uv = ImGui::GetFontTexUvWhitePixel();
+    for (int ring = 0; ring < 3; ++ring) {
+        draw->PrimReserve(segments * 6, segments * 4);
+        for (int k = 0; k < segments; ++k) {
+            const float a0 = k * 6.2831853f / segments, a1 = (k + 1) * 6.2831853f / segments;
+            const auto at = [&](float r, float angle) { return ImVec2(centre.x + std::cos(angle) * r, centre.y + std::sin(angle) * r); };
+            const ImU32 inner = IM_COL32(2, 4, 14, static_cast<int>(alphas[ring] * strength * 255.0f));
+            const ImU32 outer = IM_COL32(2, 4, 14, static_cast<int>(alphas[ring + 1] * strength * 255.0f));
+            const auto base = static_cast<ImDrawIdx>(draw->_VtxCurrentIdx);
+            draw->PrimWriteVtx(at(radii[ring], a0), uv, inner);
+            draw->PrimWriteVtx(at(radii[ring], a1), uv, inner);
+            draw->PrimWriteVtx(at(radii[ring + 1], a1), uv, outer);
+            draw->PrimWriteVtx(at(radii[ring + 1], a0), uv, outer);
+            draw->PrimWriteIdx(base);
+            draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 1));
+            draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+            draw->PrimWriteIdx(base);
+            draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 2));
+            draw->PrimWriteIdx(static_cast<ImDrawIdx>(base + 3));
+        }
+    }
+}
+
+// Scrolling film grain over the whole picture.
+void draw_grain(ImDrawList *draw, float strength) {
+    HomArt grain;
+    if (strength <= 0.01f || !hom_art("grain", grain)) return;
+    const auto display = ImGui::GetIO().DisplaySize;
+    const float tile = 256.0f * std::clamp(display.y / 1080.0f, 0.75f, 2.5f);
+    // A new random offset every frame, like the original's scrolling noise.
+    static std::uint32_t seed = 12345u;
+    seed = seed * 1664525u + 1013904223u;
+    const float ox = -static_cast<float>(seed % 256u) / 256.0f * tile, oy = -static_cast<float>((seed >> 8) % 256u) / 256.0f * tile;
+    const ImU32 colour = IM_COL32(255, 255, 255, static_cast<int>(strength * 255.0f));
+    for (float y = oy; y < display.y; y += tile)
+        for (float x = ox; x < display.x; x += tile)
+            draw->AddImage(grain.texture, ImVec2(x, y), ImVec2(x + tile, y + tile), grain.uv0, grain.uv1, colour);
+}
+
+// The original's X-ray: the picture closes in to a dark, grainy spotlight on the skater, and only
+// the bones that got hurt show through the body: warm white, the broken ones orange, red at the break.
+void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float darkness) {
+    const auto display = ImGui::GetIO().DisplaySize;
     const auto rig = hall_of_meat::latest_rig();
-    if (!rig.valid) return;
     BoneProjector projector;
     float fov{};
-    if (!live_camera(rig.base, projector.camera, fov)) return;
-    projector.focal = display.y / (2.0f * std::tan(fov * 3.14159265f / 360.0f));
-    projector.centre = ImVec2(display.x * 0.5f, display.y * 0.5f);
-    std::array<float, hall_of_meat::rig_bones> broke_at{};
-    broke_at.fill(-1.0f);
+    const bool camera = rig.valid && live_camera(rig.base, projector.camera, fov);
+    if (camera) {
+        projector.focal = display.y / (2.0f * std::tan(fov * 3.14159265f / 360.0f));
+        projector.centre = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    }
+    ImVec2 spot(display.x * 0.5f, display.y * 0.5f);
+    float spot_depth{};
+    if (camera) {
+        const auto &hips = rig.bones[4];
+        const std::array<float, 3> middle{(hips.a[0] + hips.b[0]) * 0.5f, (hips.a[1] + hips.b[1]) * 0.5f, (hips.a[2] + hips.b[2]) * 0.5f};
+        ImVec2 at;
+        if (projector.project(middle, at, spot_depth)) spot = at;
+    }
+    draw_spotlight(draw, spot, darkness * fade);
+    draw_grain(draw, 0.07f * darkness * fade);
+    if (!camera) return;
+    std::array<bool, hall_of_meat::rig_bones> broken{};
     for (const auto &b : r.broken)
-        if (b.bone < broke_at.size()) broke_at[b.bone] = static_cast<float>(std::max(0.0, now - b.time));
+        if (b.bone < broken.size()) broken[b.bone] = true;
     const bool meshes = hom_bones_ready();
     for (int pass = 0; pass < 2; ++pass)
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i) {
-            const bool broken = broke_at[i] >= 0.0f;
             const float damage = r.damage[i];
-            if (!broken && damage < 0.5f) continue;
-            if (broken != (pass == 1)) continue;
+            if (!broken[i] && damage < 0.5f) continue;
+            if (broken[i] != (pass == 1)) continue;
             const auto &seg = rig.bones[i];
-            // Glow behind the bone.
-            ImVec2 a, b;
-            float da{}, db{};
-            if (!projector.project(seg.a, a, da) || !projector.project(seg.b, b, db)) continue;
-            const float px = std::clamp(seg.radius * projector.focal * 2.0f / (da + db), 1.5f, 80.0f);
-            const ImU32 glow = broken ? IM_COL32(255, 110, 40, 255) : IM_COL32(170, 210, 255, 255);
-            // A soft bloom: faint round puffs along the bone (lines would draw hard-edged slabs).
-            if (!meshes || broken)
-                for (int k = 0; k <= 4; ++k) {
-                    const float t = k / 4.0f;
-                    const ImVec2 at(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
-                    draw->AddCircleFilled(at, px * 2.2f, alpha(glow, (broken ? 0.045f : 0.025f) * fade), 20);
-                }
             if (!meshes) {
-                draw_bone(draw, i, a, b, px, broken, broke_at[i], fade);
+                ImVec2 a, b;
+                float da{}, db{};
+                if (!projector.project(seg.a, a, da) || !projector.project(seg.b, b, db)) continue;
+                const float px = std::clamp(seg.radius * projector.focal * 2.0f / (da + db), 1.5f, 80.0f);
+                draw_bone(draw, i, a, b, px, broken[i], 1.0f, fade);
                 continue;
             }
-            const float strength = broken ? 1.0f : std::clamp((damage - 0.5f) * 2.0f, 0.35f, 1.0f);
-            const ImU32 tint = broken ? IM_COL32(255, 150, 70, 255) : IM_COL32(215, 232, 255, 255);
-            const float core = broken ? (0.75f + 0.25f * std::sin(static_cast<float>(ImGui::GetTime()) * 8.0f)) : 0.0f;
-            draw_hom_bone(draw, projector, i, seg.a, seg.b, rig.forward, tint, (broken ? 0.95f : 0.8f) * strength * fade, core);
-            if (broken && broke_at[i] < 0.5f) {
-                const float k = broke_at[i] / 0.5f;
-                const ImVec2 m((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-                draw->AddCircleFilled(m, px * (1.5f + 2.0f * k), alpha(IM_COL32(255, 230, 200, 255), (1.0f - k) * 0.6f * fade), 24);
-            }
+            const float strength = broken[i] ? 1.0f : std::clamp((damage - 0.5f) * 2.0f + 0.4f, 0.4f, 1.0f);
+            // Skate 3's colours, measured from the original: hurt (223, 212, 214), broken (198, 87, 64),
+            // fracture (158, 43, 23), after its bone map; these tints give those through the map.
+            const ImU32 tint = broken[i] ? IM_COL32(235, 103, 75, 255) : IM_COL32(255, 244, 246, 255);
+            draw_hom_bone(draw, projector, i, seg.a, seg.b, rig.forward, tint, strength * fade, broken[i] ? 0.85f : 0.0f);
         }
 }
 
@@ -586,10 +631,10 @@ void draw_hall_of_meat_hud() {
     const float target = static_cast<float>(r.total);
     s.shown_total += (target - s.shown_total) * std::min(1.0f, ImGui::GetIO().DeltaTime * 8.0f);
     if (std::abs(target - s.shown_total) < 1.0f) s.shown_total = target;
-    draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
     {
         // Darkness: deep once the body is settling (as the original reveals its X-ray), lighter mid-tumble.
-        const float dark_target = live ? ((s.tracker.live().duration > 1.5f || ImGui::GetIO().DeltaTime <= 0) ? 0.45f : 0.2f) : 0.0f;
+        // The reveal closes in once the body is settling, as in the original.
+        const float dark_target = live ? ((s.tracker.live().duration > 1.2f) ? 1.0f : 0.35f) : 0.0f;
         s.darkness += (dark_target - s.darkness) * std::min(1.0f, ImGui::GetIO().DeltaTime * 4.0f);
         if (live || s.darkness > 0.02f) draw_xray(draw, r, now, live ? 1.0f : fade, s.darkness);
     }

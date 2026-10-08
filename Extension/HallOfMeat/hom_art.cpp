@@ -90,6 +90,23 @@ std::size_t reserve_hom_art(ImFontAtlas &atlas) noexcept {
             l.pictures.emplace(name, std::move(picture));
         }
         if (SUCCEEDED(hr)) CoUninitialize();
+        {
+            // Film grain for the X-ray (Skate 3 scrolls a noise texture over the picture): grey noise.
+            Picture grain;
+            grain.width = grain.height = 128;
+            grain.rgba.resize(128 * 128 * 4);
+            std::uint32_t seed = 0x9E3779B9u;
+            for (std::size_t i = 0; i < 128 * 128; ++i) {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                const auto v = static_cast<unsigned char>(seed & 0xff);
+                grain.rgba[i * 4] = grain.rgba[i * 4 + 1] = grain.rgba[i * 4 + 2] = v;
+                grain.rgba[i * 4 + 3] = 255;
+            }
+            grain.rect = atlas.AddCustomRectRegular(grain.width, grain.height);
+            l.pictures.emplace("grain", std::move(grain));
+        }
         l.atlas = &atlas;
         atlas.Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
         logging::log(logging::Level::info, logging::Channel::graphics, "Hall Of Meat: {} pictures reserved.", l.pictures.size());
