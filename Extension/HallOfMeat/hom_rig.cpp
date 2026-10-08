@@ -1,6 +1,7 @@
 #include "hom_rig.h"
 #include "Engine/Core/Log/logging.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
+#include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Skater/client_source_spawn_internal.h"
 #include "Engine/Game/Build/20260929/client_source_spawn.h"
 #include <Windows.h>
@@ -126,10 +127,14 @@ std::array<float, 3> along(const std::array<float, 3> &from, const std::array<fl
 std::array<float, 3> lerp(const std::array<float, 3> &a, const std::array<float, 3> &b, float t) {
     return {a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
 }
-void publish_view(std::uintptr_t base, std::uintptr_t client) {
-    const auto component = client_source::detail::first_person_component(base, client);
-    std::uintptr_t holder{};
-    if (!first_person_read(component + 0xa0, &holder, 8) || !holder) return;
+// The local skater's animation holder, and the module base, for the render-time listener.
+std::atomic<std::uintptr_t> local_holder{}, module_base{};
+std::atomic<std::int64_t> last_render_pose_ms{};
+std::int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void publish_pose(std::uintptr_t base, std::uintptr_t holder) {
     const auto pose = multiplayer::read_native_pose_layout(first_person_read, base, holder, 512);
     if (!pose.buffer || pose.count != 395) return;
     std::array<Joint, 395> j{};
@@ -216,9 +221,37 @@ void apply_ui_hide(std::uintptr_t base) noexcept {
 }
 } // namespace
 
-void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
+// Called on the render thread each time a skeleton's pose is handed to the renderer: for the local
+// skater that is the exact pose being drawn this frame, so the X-ray cannot lag the body.
+void on_render_pose(std::uintptr_t animation_interface) noexcept {
+    const auto holder = local_holder.load(std::memory_order_acquire);
+    if (!holder || animation_interface != holder + 0xc0) return;
+    const auto error = GetLastError();
     try {
-        publish_view(base, client);
+        publish_pose(module_base.load(std::memory_order_relaxed), holder);
+        last_render_pose_ms.store(now_ms(), std::memory_order_relaxed);
+    } catch (...) {
+    }
+    SetLastError(error);
+}
+
+void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
+    static bool hooked = false;
+    try {
+        const auto component = client_source::detail::first_person_component(base, client);
+        std::uintptr_t holder{};
+        if (first_person_read(component + 0xa0, &holder, 8) && holder) {
+            module_base.store(base, std::memory_order_relaxed);
+            local_holder.store(holder, std::memory_order_release);
+            if (!hooked) {
+                hooked = true;
+                std::string detail;
+                if (multiplayer::install_entity_hooks(base, detail)) multiplayer::set_render_pose_listener(&on_render_pose);
+                else say("render-time pose unavailable: " + detail);
+            }
+            // Only when the render-time pose is not arriving (first person owns that hook).
+            if (now_ms() - last_render_pose_ms.load(std::memory_order_relaxed) > 150) publish_pose(base, holder);
+        }
     } catch (...) {
     }
     apply_ui_hide(base);
