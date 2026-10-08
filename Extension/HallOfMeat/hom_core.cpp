@@ -52,12 +52,10 @@ void Tracker::reset() {
     slow_since_ = air_start_ = -1;
 }
 
-// With the skeleton: a bone breaks when its own middle loses speed suddenly (it hit something),
-// harder for the sturdy ones. This is what puts the break where the body actually struck.
-void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, double dt) {
-    const auto &list = bones();
+// Each bone's middle: how much speed it lost over the last ~0.13 s. A hit stops a bone, a swing only
+// turns it. Kept every tick (not only during a bail) so a crash can be recognised by its impact.
+void Tracker::track_bones(const Sample &previous, const Sample &now, double dt) {
     const auto length = [](const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
-    // Shift the history and add this tick's speeds.
     for (std::size_t k = 0; k + 1 < bone_times_.size(); ++k) bone_times_[k] = bone_times_[k + 1];
     bone_times_.back() = now.time;
     bone_samples_ = std::min<int>(bone_samples_ + 1, static_cast<int>(bone_times_.size()));
@@ -68,16 +66,26 @@ void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, do
         for (std::size_t k = 0; k + 1 < h.size(); ++k) h[k] = h[k + 1];
         h.back() = length(v);
     }
-    if (bone_samples_ < 3 || now.time - start_.time < 0.15) return; // the wipeout's own first jolt
-    for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
-        // Speed the bone's middle lost over the last ~0.12 s: a hit stops it, a swing only turns it.
+    bone_change_ = {};
+    if (bone_samples_ < 3) return;
+    for (std::size_t i = 0; i < 19; ++i) {
         const auto &h = bone_speeds_[i];
         float before = 0;
         for (std::size_t k = h.size() - static_cast<std::size_t>(bone_samples_); k + 1 < h.size(); ++k)
             if (now.time - bone_times_[k] <= 0.13) before = std::max(before, h[k]);
         const float change = before - h.back();
         // Teleports and respawns move the whole body at once: not a hit.
-        if (change > 60.0f || change <= 0) continue;
+        if (change > 0 && change <= 60.0f) bone_change_[i] = change;
+    }
+}
+
+// During a bail: a bone breaks when its own middle took a hard enough hit (sturdy bones need more).
+void Tracker::apply_bone_hits(const Sample &now) {
+    if (now.time - start_.time < 0.15) return; // the wipeout's own first jolt
+    const auto &list = bones();
+    for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
+        const float change = bone_change_[i];
+        if (change <= 0) continue;
         const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
         live_.damage[i] = std::max(live_.damage[i], change / needed);
         if (change >= needed && !is_broken_[i]) {
@@ -131,39 +139,59 @@ void Tracker::score(Result &r) const {
 bool Tracker::update(const Sample &s) {
     bool finished = false;
     if (phase_ == Phase::finished) phase_ = Phase::idle;
-    if (phase_ == Phase::idle) {
-        // A bail starts with the wipeout state, or with the skater coming off the board and the body
-        // staying down (many slams go from the air straight to the off-board state, never through the
-        // wipeout one). A hippy jump or a plant also leaves the board, but the skater is back on
-        // their feet at once, so a throw only counts once the body has stayed down for a moment.
-        const bool on_board = s.physics_state >= 100 && s.physics_state < 300;
-        if (on_board) last_on_board_ = s.time;
-        const bool wipeout = s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state);
-        bool thrown = false;
-        const bool off_board_down = s.bones_valid && !s.upright && s.speed > 1.5f && (s.physics_state == config_.wipeout_state || s.physics_state == 504) &&
-                                    last_on_board_ >= 0 && s.time - last_on_board_ < 1.5;
-        if (off_board_down) {
-            if (pending_since_ < 0) {
-                pending_since_ = s.time;
-                pending_start_ = s;
-            }
-            thrown = s.time - pending_since_ >= 0.25;
+    {
+        const double step = s.time - previous_.time;
+        if (have_previous_ && s.bones_valid && previous_.bones_valid && step > 0 && step < 0.25) {
+            track_bones(previous_, s, step);
         } else {
-            pending_since_ = -1;
+            bone_samples_ = 0;
+            bone_change_ = {};
         }
+    }
+    if (phase_ == Phase::idle) {
+        // A bail starts in one of two ways:
+        //  - the game's wipeout physics state, at once;
+        //  - an off-board crash: the body hits something hard (its chest or hips stop suddenly) and is
+        //    then off its feet for a moment. Many slams, and every crash taken on foot, never enter the
+        //    wipeout state. Coming off the board for a hippy jump, a plant or a dive does none of it:
+        //    there is no hit, or the skater is back on their feet at once.
+        const bool off_board = s.physics_state == config_.wipeout_state || s.physics_state == 504;
+        if (s.bones_valid && s.upright) {
+            if (upright_idle_since_ < 0) upright_idle_since_ = s.time;
+            if (s.time - upright_idle_since_ >= 0.3) armed_ = true;
+        } else {
+            upright_idle_since_ = -1;
+        }
+        if (s.bones_valid && !s.upright && off_board) {
+            if (down_since_ < 0) {
+                down_since_ = s.time;
+                down_start_ = s;
+            }
+        } else {
+            down_since_ = -1;
+        }
+        {
+            float torso = std::max({bone_change_[2], bone_change_[3], bone_change_[4]}), any = 0;
+            for (const float c : bone_change_) any = std::max(any, c);
+            if (off_board && (torso >= config_.hit_torso || any >= config_.hit_any)) hit_time_ = s.time;
+        }
+        const bool wipeout = s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state);
+        const bool thrown = armed_ && down_since_ >= 0 && s.time - down_since_ >= config_.down_time && hit_time_ >= 0 && s.time - hit_time_ <= 0.8 &&
+                            hit_time_ >= down_since_ - 0.4;
+        if (wipeout) trigger_ = "wipeout state";
+        else if (thrown) trigger_ = "hit and down";
         if (wipeout || thrown) {
-            last_on_board_ = -1; // one bail per time off the board
-            pending_since_ = -1;
+            armed_ = false;
+            hit_time_ = -1;
+            down_since_ = -1;
             phase_ = Phase::bailing;
             live_ = {};
             live_.serial = ++serial_;
             rng_ = 0xC0FFEEull * live_.serial + 17;
             is_broken_.assign(bones().size(), false);
-            have_bone_velocity_ = false;
-            bone_samples_ = 0;
             went_down_ = !s.upright;
             upright_since_ = -1;
-            start_ = thrown ? pending_start_ : s;
+            start_ = thrown ? down_start_ : s;
             slow_since_ = -1;
             air_start_ = -1;
             live_.peak_speed = s.speed;
@@ -174,10 +202,9 @@ bool Tracker::update(const Sample &s) {
             const float drop = previous_.speed - s.speed;
             if (s.bones_valid && previous_.bones_valid) {
                 if (drop >= config_.impact_threshold) ++live_.impacts;
-                break_bones_from_rig(previous_, s, dt);
-            } else {
-                have_bone_velocity_ = false;
-                if (drop >= config_.impact_threshold) register_impact(drop);
+                apply_bone_hits(s);
+            } else if (drop >= config_.impact_threshold) {
+                register_impact(drop);
             }
             if (s.airborne) {
                 if (air_start_ < 0) air_start_ = previous_.time;
@@ -202,7 +229,8 @@ bool Tracker::update(const Sample &s) {
         } else {
             slow_since_ = -1;
         }
-        const bool settled = slow_since_ >= 0 && s.time - slow_since_ >= config_.settle_time;
+        // Lying still is not the end while the skeleton is read: the X-ray stays until the skater is up.
+        const bool settled = !s.bones_valid && slow_since_ >= 0 && s.time - slow_since_ >= config_.settle_time;
         // With the skeleton: over once the skater is back on their feet. Without it: out of the
         // wipeout state and slow.
         if (s.bones_valid && !s.upright) went_down_ = true;

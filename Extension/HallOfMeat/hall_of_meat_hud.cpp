@@ -535,8 +535,8 @@ void hall_of_meat_tick() {
         // Calibration: the X-ray skull and pelvis against the skater's own position.
         if (const auto rig = hall_of_meat::latest_rig(); rig.valid)
             logging::log(logging::Level::info, logging::Channel::assets,
-                         "Hall Of Meat: skater ({:.2f}, {:.2f}, {:.2f}), skull ({:.2f}, {:.2f}, {:.2f}), hips ({:.2f}, {:.2f}, {:.2f}).",
-                         in.position[0], in.position[1], in.position[2], rig.bones[0].a[0], rig.bones[0].a[1], rig.bones[0].a[2],
+                         "Hall Of Meat: bail started by {}: skater ({:.2f}, {:.2f}, {:.2f}), skull ({:.2f}, {:.2f}, {:.2f}), hips ({:.2f}, {:.2f}, {:.2f}).",
+                         s.tracker.trigger(), in.position[0], in.position[1], in.position[2], rig.bones[0].a[0], rig.bones[0].a[1], rig.bones[0].a[2],
                          rig.bones[4].a[0], rig.bones[4].a[1], rig.bones[4].a[2]);
         else
             logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: skeleton not readable at bail start.");

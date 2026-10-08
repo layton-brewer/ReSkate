@@ -64,10 +64,13 @@ struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
     float bone_break_speed = 11.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
+    float hit_torso = 3.5f;             // m/s the chest or hips lose in ~0.13 s: the body hit something
+    float hit_any = 9.0f;               // or any bone does (a limb slammed hard)
+    float down_time = 0.30f;            // seconds the body must be off its feet for an off-board bail
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
-    float max_duration = 45.0f;
+    float max_duration = 30.0f;
     // Calibrated against the original's HUD (video): air 6.4 s and drops past ~52 m both read 10,000;
     // a 7.10 s bail read 7,750 and 8.26 s read 11,333; 36 km/h read 785.
     float air_scale = 1850.0f; // points per second of air, capped at metric_cap
@@ -87,6 +90,8 @@ public:
     // Returns true on the tick a bail ends (result() is then valid).
     bool update(const Sample &sample);
     Phase phase() const { return phase_; }
+    // Why the last bail started, for the log.
+    const std::string &trigger() const { return trigger_; }
     const Result &live() const { return live_; }   // the bail in progress, scored so far
     const Result &result() const { return last_; } // the last finished bail
     void reset();
@@ -104,18 +109,19 @@ private:
     std::uint32_t serial_{};
     std::uint64_t rng_{};
     std::vector<bool> is_broken_;
-    std::array<std::array<float, 3>, 19> bone_velocity_{};
-    bool have_bone_velocity_{};
     // Each bone's recent speeds (newest last), to measure how much it lost over a short window.
     std::array<std::array<float, 8>, 19> bone_speeds_{};
     std::array<double, 8> bone_times_{};
     int bone_samples_{};
-    double last_on_board_{-1};  // when the skater was last riding or in the air on the board
     bool went_down_{};          // the body has been off its feet during this bail
     double upright_since_{-1};
-    double pending_since_{-1};  // off the board and down, waiting to be sure it is a bail
-    Sample pending_start_{};
-    void break_bones_from_rig(const Sample &previous, const Sample &now, double dt);
+    void track_bones(const Sample &previous, const Sample &now, double dt);
+    void apply_bone_hits(const Sample &now);
+    std::array<float, 19> bone_change_{}; // speed each bone lost over the last ~0.13 s
+    double down_since_{-1}, hit_time_{-1}, upright_idle_since_{-1};
+    Sample down_start_{};
+    bool armed_{true}; // the skater has been on their feet since the last bail
+    std::string trigger_;
 };
 
 const char *title_for(int total, std::size_t bones_broken);
