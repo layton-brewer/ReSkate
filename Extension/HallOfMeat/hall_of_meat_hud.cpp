@@ -1,5 +1,6 @@
 #include "hall_of_meat_hud.h"
 #include "hom_art.h"
+#include "hom_bones.h"
 #include "hom_core.h"
 #include "hom_rig.h"
 #include "Engine/Core/Platform/memory.h"
@@ -80,6 +81,8 @@ struct State {
     int best{};
     std::uint32_t last_state{};
     double last_time{-1};
+    double heartbeat{};
+    float darkness{};
 };
 State &state() {
     static State value;
@@ -313,29 +316,52 @@ void draw_bone(ImDrawList *draw, std::size_t index, ImVec2 a, ImVec2 b, float r,
     }
 }
 
-void draw_xray(ImDrawList *draw, const Result &r, double now, float fade) {
+// The original's X-ray: the world sinks into a dark blue, and only the bones that got hurt show
+// through the body, glowing white, the broken ones orange with a red-hot fracture.
+void draw_xray(ImDrawList *draw, const Result &r, double now, float fade, float darkness) {
+    const auto display = ImGui::GetIO().DisplaySize;
+    if (darkness > 0.01f)
+        draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(4, 8, 26, static_cast<int>(darkness * 255.0f * fade)));
     const auto rig = hall_of_meat::latest_rig();
     if (!rig.valid) return;
-    Projector project;
+    BoneProjector projector;
     float fov{};
-    if (!live_camera(rig.base, project.m, fov)) return;
-    const auto display = ImGui::GetIO().DisplaySize;
-    project.focal = display.y / (2.0f * std::tan(fov * 3.14159265f / 360.0f));
-    project.centre = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    if (!live_camera(rig.base, projector.camera, fov)) return;
+    projector.focal = display.y / (2.0f * std::tan(fov * 3.14159265f / 360.0f));
+    projector.centre = ImVec2(display.x * 0.5f, display.y * 0.5f);
     std::array<float, hall_of_meat::rig_bones> broke_at{};
     broke_at.fill(-1.0f);
     for (const auto &b : r.broken)
         if (b.bone < broke_at.size()) broke_at[b.bone] = static_cast<float>(std::max(0.0, now - b.time));
-    // Healthy bones first, broken ones on top.
+    const bool meshes = hom_bones_ready();
     for (int pass = 0; pass < 2; ++pass)
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i) {
             const bool broken = broke_at[i] >= 0.0f;
+            const float damage = r.damage[i];
+            if (!broken && damage < 0.5f) continue;
             if (broken != (pass == 1)) continue;
             const auto &seg = rig.bones[i];
+            // Glow behind the bone.
             ImVec2 a, b;
-            float pa{}, pb{};
-            if (!project(seg.a, a, pa) || !project(seg.b, b, pb)) continue;
-            draw_bone(draw, i, a, b, std::clamp(seg.radius * (pa + pb) * 0.5f, 1.5f, 80.0f), broken, broke_at[i], fade);
+            float da{}, db{};
+            if (!projector.project(seg.a, a, da) || !projector.project(seg.b, b, db)) continue;
+            const float px = std::clamp(seg.radius * projector.focal * 2.0f / (da + db), 1.5f, 80.0f);
+            const ImU32 glow = broken ? IM_COL32(255, 110, 40, 255) : IM_COL32(170, 210, 255, 255);
+            for (int layer = 3; layer >= 1; --layer)
+                draw->AddLine(a, b, alpha(glow, (broken ? 0.12f : 0.07f) * fade), px * (1.4f + 1.1f * layer));
+            if (!meshes) {
+                draw_bone(draw, i, a, b, px, broken, broke_at[i], fade);
+                continue;
+            }
+            const float strength = broken ? 1.0f : std::clamp((damage - 0.5f) * 2.0f, 0.35f, 1.0f);
+            const ImU32 tint = broken ? IM_COL32(255, 150, 70, 255) : IM_COL32(215, 232, 255, 255);
+            const float core = broken ? (0.75f + 0.25f * std::sin(static_cast<float>(ImGui::GetTime()) * 8.0f)) : 0.0f;
+            draw_hom_bone(draw, projector, i, seg.a, seg.b, rig.forward, tint, (broken ? 0.95f : 0.8f) * strength * fade, core);
+            if (broken && broke_at[i] < 0.5f) {
+                const float k = broke_at[i] / 0.5f;
+                const ImVec2 m((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+                draw->AddCircleFilled(m, px * (1.5f + 2.0f * k), alpha(IM_COL32(255, 230, 200, 255), (1.0f - k) * 0.6f * fade), 24);
+            }
         }
 }
 
@@ -420,7 +446,15 @@ void hall_of_meat_tick() {
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i)
             for (std::size_t k = 0; k < 3; ++k) in.bone_centres[i][k] = (rig.bones[i].a[k] + rig.bones[i].b[k]) * 0.5f;
     }
-    // Calibration log: the physics states a bail passes through.
+    // Calibration log: every physics state change, and a heartbeat, so a missed bail can be traced.
+    if (in.physics_state != s.last_state && s.tracker.phase() != Phase::bailing)
+        logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: state {} -> {} ({:.1f} km/h, airborne {}).",
+                     s.last_state, in.physics_state, in.speed * 3.6f, in.airborne);
+    if (now - s.heartbeat > 10.0) {
+        s.heartbeat = now;
+        logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: watching, state {}, skeleton {}.", in.physics_state,
+                     in.bones_valid ? "read" : "not read");
+    }
     if (s.tracker.phase() == Phase::bailing && in.physics_state != s.last_state)
         logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: physics state {} -> {} at {:.1f} km/h.",
                      s.last_state, in.physics_state, in.speed * 3.6f);
@@ -548,7 +582,12 @@ void draw_hall_of_meat_hud() {
     s.shown_total += (target - s.shown_total) * std::min(1.0f, ImGui::GetIO().DeltaTime * 8.0f);
     if (std::abs(target - s.shown_total) < 1.0f) s.shown_total = target;
     draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
-    if (live) draw_xray(draw, r, now, 1.0f);
+    {
+        // Darkness: deep once the body is settling (as the original reveals its X-ray), lighter mid-tumble.
+        const float dark_target = live ? ((s.tracker.live().duration > 1.5f || ImGui::GetIO().DeltaTime <= 0) ? 0.72f : 0.35f) : 0.0f;
+        s.darkness += (dark_target - s.darkness) * std::min(1.0f, ImGui::GetIO().DeltaTime * 4.0f);
+        if (live || s.darkness > 0.02f) draw_xray(draw, r, now, live ? 1.0f : fade, s.darkness);
+    }
     draw_block(draw, r, s.shown_total, fade, scale, now, s.started);
 }
 } // namespace dingosdk::overlay

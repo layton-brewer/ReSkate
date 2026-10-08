@@ -164,6 +164,7 @@ void publish_view(std::uintptr_t base, std::uintptr_t client) {
         {P(344), along(P(343), P(344), 0.07f), 0.025f}, {P(11), along(P(10), P(11), 0.07f), 0.025f},
     }};
     view.valid = true;
+    view.forward = rotate(j[7].q, {0, 1, 0});
     // Upright: the head at least half a metre above the hips (standing or walking off).
     rig_upright().store(P(103)[1] - P(7)[1] > 0.5f);
     view.base = base;

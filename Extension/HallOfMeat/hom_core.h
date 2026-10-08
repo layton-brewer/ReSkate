@@ -43,6 +43,8 @@ struct BrokenBone {
 struct Result {
     std::uint32_t serial{};
     std::vector<BrokenBone> broken;
+    // Worst hit each bone took, as a share of what breaks it (1 = broken). The X-ray shows bones past ~0.5.
+    std::array<float, 19> damage{};
     int impacts{};
     float distance{};    // metres from where the bail began
     float peak_speed{};  // m/s

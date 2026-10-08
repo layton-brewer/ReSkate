@@ -62,7 +62,6 @@ void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, do
             velocity[i][k] = static_cast<float>((now.bone_centres[i][k] - previous.bone_centres[i][k]) / dt);
     if (have_bone_velocity_) {
         for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
-            if (is_broken_[i]) continue;
             // Speed the bone's middle lost this tick: a hit stops it, a swing only turns it.
             const auto length = [](const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
             const float change = length(bone_velocity_[i]) - length(velocity[i]);
@@ -70,7 +69,8 @@ void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, do
             if (change > 60.0f) continue;
             const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
             if (now.time - start_.time < 0.15) continue; // the wipeout's own first jolt
-            if (change >= needed) {
+            live_.damage[i] = std::max(live_.damage[i], change / needed);
+            if (change >= needed && !is_broken_[i]) {
                 is_broken_[i] = true;
                 live_.broken.push_back({i, change, now.time});
                 live_.biggest_hit = std::max(live_.biggest_hit, change);
@@ -100,6 +100,7 @@ void Tracker::register_impact(float drop) {
         const float chance = std::clamp((drop - 3.0f) / 14.0f, 0.08f, 0.97f) * (0.35f + list[index].fragility);
         if (unit(rng_) < chance) {
             is_broken_[index] = true;
+            live_.damage[index] = std::max(live_.damage[index], 1.0f);
             live_.broken.push_back({index, drop, previous_.time});
         }
     }

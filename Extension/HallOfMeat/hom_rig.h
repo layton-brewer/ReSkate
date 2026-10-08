@@ -18,6 +18,7 @@ struct RigSegment {
 struct RigView {
     bool valid{};
     std::array<RigSegment, rig_bones> bones{};
+    std::array<float, 3> forward{0, 0, 1}; // the skater's body forward (pelvis local +Y)
     std::uintptr_t base{};
     std::chrono::steady_clock::time_point at{};
 };
