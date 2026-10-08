@@ -393,6 +393,7 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
     for (const auto &b : r.broken)
         if (b.bone < broken.size()) broken[b.bone] = true;
     const bool meshes = hom_bones_ready();
+    if (hall_of_meat::rig_upright().load()) return; // getting up: the original's X-ray is over
     for (int pass = 0; pass < 2; ++pass)
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i) {
             const float damage = r.damage[i];

@@ -164,7 +164,18 @@ void publish_view(std::uintptr_t base, std::uintptr_t client) {
         {P(344), along(P(343), P(344), 0.07f), 0.025f}, {P(11), along(P(10), P(11), 0.07f), 0.025f},
     }};
     view.valid = true;
-    view.forward = rotate(j[7].q, {0, 1, 0});
+    {
+        // Body forward from the skeleton's own shape: up the spine crossed with the hips' left-to-right,
+        // turned to agree with the face (head local +Y looks out of the face).
+        const auto sub3 = [](const std::array<float, 3> &a, const std::array<float, 3> &b) { return std::array<float, 3>{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+        const auto up = sub3(P(45), P(7));
+        const auto right = sub3(P(8), P(341));
+        std::array<float, 3> f{up[1] * right[2] - up[2] * right[1], up[2] * right[0] - up[0] * right[2], up[0] * right[1] - up[1] * right[0]};
+        const auto face = rotate(j[103].q, {0, 1, 0});
+        if (f[0] * face[0] + f[1] * face[1] + f[2] * face[2] < 0) f = {-f[0], -f[1], -f[2]};
+        const float l = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+        view.forward = l > 1e-4f ? std::array<float, 3>{f[0] / l, f[1] / l, f[2] / l} : face;
+    }
     // Upright: the head at least half a metre above the hips (standing or walking off).
     rig_upright().store(P(103)[1] - P(7)[1] > 0.5f);
     view.base = base;

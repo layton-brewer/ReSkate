@@ -180,7 +180,8 @@ void draw_hom_bone(ImDrawList *draw, const BoneProjector &projector, std::size_t
         for (std::size_t i = 0; i < count; ++i) {
             const Vec3f local = sub(mesh.positions[i], bind.a);
             const float x = dot(local, from.axis), y = dot(local, from.front), z = dot(local, from.side);
-            const Vec3f world = add(a, mul(add(add(mul(to.axis, x), mul(to.front, y)), mul(to.side, z)), scale));
+            const float girth = std::min(1.0f, scale);
+            const Vec3f world = add(a, add(mul(to.axis, x * scale), mul(add(mul(to.front, y), mul(to.side, z)), girth)));
             const Vec3f &n0 = mesh.normals[i];
             const Vec3f normal = normalise(add(add(mul(to.axis, dot(n0, from.axis)), mul(to.front, dot(n0, from.front))), mul(to.side, dot(n0, from.side))));
             visible[i] = projector.project(world, screen[i], depth[i]);
