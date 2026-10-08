@@ -13,6 +13,7 @@ namespace dingosdk::hall_of_meat {
 inline constexpr std::size_t rig_bones = 19;
 struct RigSegment {
     std::array<float, 3> a{}, b{};
+    std::array<float, 3> va{}, vb{}; // m/s, from the last two reads
     float radius{}; // metres
 };
 struct RigView {
@@ -28,7 +29,16 @@ inline RigView latest;
 } // namespace rig_detail
 inline void publish_rig(const RigView &view) noexcept {
     std::lock_guard lock(rig_detail::mutex);
-    rig_detail::latest = view;
+    RigView next = view;
+    const auto &previous = rig_detail::latest;
+    const double dt = std::chrono::duration<double>(view.at - previous.at).count();
+    if (previous.valid && dt > 0.003 && dt < 0.12)
+        for (std::size_t i = 0; i < rig_bones; ++i)
+            for (std::size_t k = 0; k < 3; ++k) {
+                next.bones[i].va[k] = static_cast<float>((view.bones[i].a[k] - previous.bones[i].a[k]) / dt);
+                next.bones[i].vb[k] = static_cast<float>((view.bones[i].b[k] - previous.bones[i].b[k]) / dt);
+            }
+    rig_detail::latest = next;
 }
 // Nothing when the skeleton was not read recently.
 inline RigView latest_rig(std::chrono::milliseconds max_age = std::chrono::milliseconds(250)) noexcept {

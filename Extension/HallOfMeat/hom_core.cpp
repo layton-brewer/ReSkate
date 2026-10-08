@@ -132,14 +132,28 @@ bool Tracker::update(const Sample &s) {
     bool finished = false;
     if (phase_ == Phase::finished) phase_ = Phase::idle;
     if (phase_ == Phase::idle) {
-        // A bail: the wipeout state, or the skater coming off the board straight into a ragdoll
-        // (many slams go from the air directly to the off-board state, never through the wipeout one).
+        // A bail starts with the wipeout state, or with the skater coming off the board and the body
+        // staying down (many slams go from the air straight to the off-board state, never through the
+        // wipeout one). A hippy jump or a plant also leaves the board, but the skater is back on
+        // their feet at once, so a throw only counts once the body has stayed down for a moment.
         const bool on_board = s.physics_state >= 100 && s.physics_state < 300;
         if (on_board) last_on_board_ = s.time;
         const bool wipeout = s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state);
-        const bool thrown = s.bones_valid && !s.upright && s.speed > 1.5f && s.physics_state >= 300 && last_on_board_ >= 0 && s.time - last_on_board_ < 1.0;
+        bool thrown = false;
+        const bool off_board_down = s.bones_valid && !s.upright && s.speed > 1.5f && (s.physics_state == config_.wipeout_state || s.physics_state == 504) &&
+                                    last_on_board_ >= 0 && s.time - last_on_board_ < 1.5;
+        if (off_board_down) {
+            if (pending_since_ < 0) {
+                pending_since_ = s.time;
+                pending_start_ = s;
+            }
+            thrown = s.time - pending_since_ >= 0.25;
+        } else {
+            pending_since_ = -1;
+        }
         if (wipeout || thrown) {
             last_on_board_ = -1; // one bail per time off the board
+            pending_since_ = -1;
             phase_ = Phase::bailing;
             live_ = {};
             live_.serial = ++serial_;
@@ -149,7 +163,7 @@ bool Tracker::update(const Sample &s) {
             bone_samples_ = 0;
             went_down_ = !s.upright;
             upright_since_ = -1;
-            start_ = s;
+            start_ = thrown ? pending_start_ : s;
             slow_since_ = -1;
             air_start_ = -1;
             live_.peak_speed = s.speed;

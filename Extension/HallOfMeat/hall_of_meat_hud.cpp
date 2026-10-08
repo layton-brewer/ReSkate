@@ -370,7 +370,17 @@ void draw_grain(ImDrawList *draw, float strength) {
 // the bones that got hurt show through the body: warm white, the broken ones orange, red at the break.
 void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float darkness) {
     const auto display = ImGui::GetIO().DisplaySize;
-    const auto rig = hall_of_meat::latest_rig();
+    auto rig = hall_of_meat::latest_rig();
+    if (rig.valid) {
+        // The pose was read at the client tick; carry each bone on by the time since, so the X-ray
+        // keeps up with the body it is drawn over.
+        const float ahead = std::clamp(static_cast<float>(std::chrono::duration<double>(Clock::now() - rig.at).count()) + 0.012f, 0.0f, 0.06f);
+        for (auto &seg : rig.bones)
+            for (std::size_t k = 0; k < 3; ++k) {
+                seg.a[k] += std::clamp(seg.va[k], -40.0f, 40.0f) * ahead;
+                seg.b[k] += std::clamp(seg.vb[k], -40.0f, 40.0f) * ahead;
+            }
+    }
     BoneProjector projector;
     float fov{};
     const bool camera = rig.valid && live_camera(rig.base, projector.camera, fov);

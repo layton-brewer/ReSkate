@@ -113,6 +113,8 @@ private:
     double last_on_board_{-1};  // when the skater was last riding or in the air on the board
     bool went_down_{};          // the body has been off its feet during this bail
     double upright_since_{-1};
+    double pending_since_{-1};  // off the board and down, waiting to be sure it is a bail
+    Sample pending_start_{};
     void break_bones_from_rig(const Sample &previous, const Sample &now, double dt);
 };
 

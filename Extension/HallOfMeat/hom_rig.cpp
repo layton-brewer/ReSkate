@@ -246,11 +246,11 @@ void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
             if (!hooked) {
                 hooked = true;
                 std::string detail;
-                if (multiplayer::install_entity_hooks(base, detail)) multiplayer::set_render_pose_listener(&on_render_pose);
-                else say("render-time pose unavailable: " + detail);
+                // The render-time pose is the one before the physics result is applied, so it sits off
+                // the ragdoll; the client-tick read below matches the drawn body. Hook kept off.
+                (void)detail;
             }
-            // Only when the render-time pose is not arriving (first person owns that hook).
-            if (now_ms() - last_render_pose_ms.load(std::memory_order_relaxed) > 150) publish_pose(base, holder);
+            publish_pose(base, holder);
         }
     } catch (...) {
     }
