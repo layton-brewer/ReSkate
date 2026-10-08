@@ -13,6 +13,7 @@ void register_hall_of_meat_commands(Commands &registry) {
         {"list", "List the Hall Of Meat challenges", nullptr},
         {"status", "How the Hall Of Meat challenge is going", nullptr},
         {"rig", "Log the skater skeleton (diagnostic)", nullptr},
+        {"roll", "X-ray bone roll from the joints (1) or from the body forward (0)", "0|1"},
     };
     for (const auto &verb : verbs) {
         std::vector<Argument> arguments;

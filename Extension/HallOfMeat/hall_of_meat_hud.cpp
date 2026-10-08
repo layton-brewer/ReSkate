@@ -318,14 +318,17 @@ void draw_bone(ImDrawList *draw, std::size_t index, ImVec2 a, ImVec2 b, float r,
 
 // The original's X-ray: the world sinks into a dark blue, and only the bones that got hurt show
 // through the body, glowing white, the broken ones orange with a red-hot fracture.
-// A dark spotlight on the skater, like the original's HoM vignette: clear around the body, falling
-// to near black at the edges of the screen. Drawn as rings with per-vertex alpha.
-void draw_spotlight(ImDrawList *draw, ImVec2 centre, float strength) {
+// The original's HoM grade, measured from its footage: the world goes dark, cool and nearly
+// colourless (ground about (30, 32, 50), edges near black), where the skater's own colours wash
+// out to blue-grey. Drawn as a cool wash over the whole picture plus a spotlight that falls to
+// near black away from the skater.
+void draw_grade(ImDrawList *draw, ImVec2 centre, float strength) {
     if (strength <= 0.01f) return;
     const auto display = ImGui::GetIO().DisplaySize;
+    draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(14, 22, 58, static_cast<int>(0.60f * strength * 255.0f)));
     const float h = display.y;
-    const float radii[]{0.16f * h, 0.34f * h, 0.62f * h, 1.6f * std::max(display.x, display.y)};
-    const float alphas[]{0.0f, 0.55f, 0.9f, 0.97f};
+    const float radii[]{0.14f * h, 0.30f * h, 0.58f * h, 1.7f * std::max(display.x, display.y)};
+    const float alphas[]{0.0f, 0.45f, 0.82f, 0.95f};
     constexpr int segments = 48;
     const auto uv = ImGui::GetFontTexUvWhitePixel();
     for (int ring = 0; ring < 3; ++ring) {
@@ -333,8 +336,8 @@ void draw_spotlight(ImDrawList *draw, ImVec2 centre, float strength) {
         for (int k = 0; k < segments; ++k) {
             const float a0 = k * 6.2831853f / segments, a1 = (k + 1) * 6.2831853f / segments;
             const auto at = [&](float r, float angle) { return ImVec2(centre.x + std::cos(angle) * r, centre.y + std::sin(angle) * r); };
-            const ImU32 inner = IM_COL32(2, 4, 14, static_cast<int>(alphas[ring] * strength * 255.0f));
-            const ImU32 outer = IM_COL32(2, 4, 14, static_cast<int>(alphas[ring + 1] * strength * 255.0f));
+            const ImU32 inner = IM_COL32(1, 3, 12, static_cast<int>(alphas[ring] * strength * 255.0f));
+            const ImU32 outer = IM_COL32(1, 3, 12, static_cast<int>(alphas[ring + 1] * strength * 255.0f));
             const auto base = static_cast<ImDrawIdx>(draw->_VtxCurrentIdx);
             draw->PrimWriteVtx(at(radii[ring], a0), uv, inner);
             draw->PrimWriteVtx(at(radii[ring], a1), uv, inner);
@@ -350,16 +353,16 @@ void draw_spotlight(ImDrawList *draw, ImVec2 centre, float strength) {
     }
 }
 
-// Scrolling film grain over the whole picture.
+// Scrolling film grain over the whole picture, one noise texel per screen pixel like the original's
+// noise pass (f_noise_texture scrolled every frame).
 void draw_grain(ImDrawList *draw, float strength) {
     HomArt grain;
     if (strength <= 0.01f || !hom_art("grain", grain)) return;
     const auto display = ImGui::GetIO().DisplaySize;
-    const float tile = 256.0f * std::clamp(display.y / 1080.0f, 0.75f, 2.5f);
-    // A new random offset every frame, like the original's scrolling noise.
+    const float tile = 128.0f;
     static std::uint32_t seed = 12345u;
     seed = seed * 1664525u + 1013904223u;
-    const float ox = -static_cast<float>(seed % 256u) / 256.0f * tile, oy = -static_cast<float>((seed >> 8) % 256u) / 256.0f * tile;
+    const float ox = -static_cast<float>(seed % 128u), oy = -static_cast<float>((seed >> 8) % 128u);
     const ImU32 colour = IM_COL32(255, 255, 255, static_cast<int>(strength * 255.0f));
     for (float y = oy; y < display.y; y += tile)
         for (float x = ox; x < display.x; x += tile)
@@ -398,8 +401,8 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
         ImVec2 at;
         if (projector.project(middle, at, spot_depth)) spot = at;
     }
-    draw_spotlight(draw, spot, darkness * fade);
-    draw_grain(draw, 0.07f * darkness * fade);
+    draw_grade(draw, spot, darkness * fade);
+    draw_grain(draw, 0.13f * darkness * fade);
     if (!camera) return;
     std::array<bool, hall_of_meat::rig_bones> broken{};
     for (const auto &b : r.broken)
@@ -424,7 +427,8 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
             // Skate 3's colours, measured from the original: hurt (223, 212, 214), broken (198, 87, 64),
             // fracture (158, 43, 23), after its bone map; these tints give those through the map.
             const ImU32 tint = broken[i] ? IM_COL32(235, 103, 75, 255) : IM_COL32(255, 244, 246, 255);
-            draw_hom_bone(draw, projector, i, seg.a, seg.b, rig.forward, tint, strength * fade, broken[i] ? 0.85f : 0.0f);
+            const auto &facing = seg.has_front && hall_of_meat::roll_from_joints().load() ? seg.front : rig.forward;
+            draw_hom_bone(draw, projector, i, seg.a, seg.b, facing, tint, strength * fade, broken[i] ? 0.85f : 0.0f);
         }
 }
 
@@ -603,6 +607,10 @@ std::string hall_of_meat_command(std::string_view verb, const std::vector<std::s
         s.session.ends = now + s.session.challenge.minutes * 60.0;
         return "Hall Of Meat: started \"" + list[index].title + "\".";
     }
+    if (verb == "roll") {
+        if (!words.empty()) hall_of_meat::roll_from_joints().store(words[0] != "0");
+        return std::string("Hall Of Meat: bone roll from ") + (hall_of_meat::roll_from_joints().load() ? "the joints." : "the body forward.");
+    }
     if (verb == "rig") {
         hall_of_meat::rig_probe_requested().store(true);
         return "Hall Of Meat: reading the skeleton, see ReSkate.log.";
@@ -647,7 +655,7 @@ void draw_hall_of_meat_hud() {
     {
         // Darkness: deep once the body is settling (as the original reveals its X-ray), lighter mid-tumble.
         // The reveal closes in once the body is settling, as in the original.
-        const float dark_target = live ? ((s.tracker.live().duration > 1.2f) ? 1.0f : 0.35f) : 0.0f;
+        const float dark_target = live ? ((s.tracker.live().duration > 0.7f) ? 1.0f : 0.5f) : 0.0f;
         s.darkness += (dark_target - s.darkness) * std::min(1.0f, ImGui::GetIO().DeltaTime * 4.0f);
         if (live || s.darkness > 0.02f) draw_xray(draw, r, now, live ? 1.0f : fade, s.darkness);
     }

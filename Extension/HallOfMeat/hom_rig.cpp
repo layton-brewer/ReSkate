@@ -127,11 +127,51 @@ std::array<float, 3> along(const std::array<float, 3> &from, const std::array<fl
 std::array<float, 3> lerp(const std::array<float, 3> &a, const std::array<float, 3> &b, float t) {
     return {a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t};
 }
-// The local skater's animation holder, and the module base, for the render-time listener.
-std::atomic<std::uintptr_t> local_holder{}, module_base{};
-std::atomic<std::int64_t> last_render_pose_ms{};
-std::int64_t now_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+
+// ---- Roll from the joints --------------------------------------------------------------------
+// A bone mesh needs to know which way it faces around its own length. Joint-to-joint positions give
+// the length direction only, so the roll used to come from the body's forward; that goes wrong once
+// the body tumbles. Each bone instead follows its start joint's rotation R. While the skater is
+// upright, K = R^T F is measured against the frame F built from the body forward (right then), and
+// afterwards F = R K carries that same roll through any pose.
+using Vec3 = std::array<float, 3>;
+using Mat3 = std::array<Vec3, 3>; // three columns
+Vec3 cross3(const Vec3 &a, const Vec3 &b) { return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
+float dot3(const Vec3 &a, const Vec3 &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+Vec3 norm3(const Vec3 &a) {
+    const float l = std::sqrt(dot3(a, a));
+    return l > 1e-6f ? Vec3{a[0] / l, a[1] / l, a[2] / l} : Vec3{0, 0, 0};
+}
+Mat3 rotation_columns(const std::array<float, 4> &q) {
+    return {rotate(q, {1, 0, 0}), rotate(q, {0, 1, 0}), rotate(q, {0, 0, 1})};
+}
+// K = R^T F: entry (row i, column k) = dot(R column i, F column k).
+Mat3 relative(const Mat3 &r, const Mat3 &f) {
+    Mat3 k{};
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row) k[col][row] = dot3(r[row], f[col]);
+    return k;
+}
+Vec3 mat_vec(const Mat3 &r, const Vec3 &v) { // R v
+    return {r[0][0] * v[0] + r[1][0] * v[1] + r[2][0] * v[2], r[0][1] * v[0] + r[1][1] * v[1] + r[2][1] * v[2],
+            r[0][2] * v[0] + r[1][2] * v[1] + r[2][2] * v[2]};
+}
+void orthonormalise(Mat3 &m) {
+    m[0] = norm3(m[0]);
+    Vec3 y = m[1];
+    const float d = dot3(y, m[0]);
+    y = {y[0] - m[0][0] * d, y[1] - m[0][1] * d, y[2] - m[0][2] * d};
+    m[1] = norm3(y);
+    m[2] = cross3(m[0], m[1]);
+}
+constexpr std::array<std::uint16_t, rig_bones> reference_joint{103, 101, 44, 42, 7, 276, 47, 277, 48, 278, 49, 341, 8, 342, 9, 343, 10, 344, 11};
+struct RollCalibration {
+    std::array<Mat3, rig_bones> k{};
+    std::array<bool, rig_bones> set{};
+};
+RollCalibration &roll_calibration() {
+    static RollCalibration value;
+    return value;
 }
 
 void publish_pose(std::uintptr_t base, std::uintptr_t holder) {
@@ -182,7 +222,47 @@ void publish_pose(std::uintptr_t base, std::uintptr_t holder) {
         view.forward = l > 1e-4f ? std::array<float, 3>{f[0] / l, f[1] / l, f[2] / l} : face;
     }
     // Upright: the head at least half a metre above the hips (standing or walking off).
-    rig_upright().store(P(103)[1] - P(7)[1] > 0.5f);
+    const bool upright = P(103)[1] - P(7)[1] > 0.5f;
+    rig_upright().store(upright);
+    {
+        auto &cal = roll_calibration();
+        for (std::size_t i = 0; i < rig_bones; ++i) {
+            auto &seg = view.bones[i];
+            const Vec3 axis = norm3({seg.b[0] - seg.a[0], seg.b[1] - seg.a[1], seg.b[2] - seg.a[2]});
+            const auto &joint = j[reference_joint[i]];
+            const float qn = std::sqrt(joint.q[0] * joint.q[0] + joint.q[1] * joint.q[1] + joint.q[2] * joint.q[2] + joint.q[3] * joint.q[3]);
+            if (dot3(axis, axis) < 0.5f || qn < 0.5f) continue;
+            const std::array<float, 4> q{joint.q[0] / qn, joint.q[1] / qn, joint.q[2] / qn, joint.q[3] / qn};
+            const Mat3 r = rotation_columns(q);
+            if (upright) {
+                // The frame this bone has right now, from the body forward.
+                const float along = dot3(view.forward, axis);
+                Vec3 front = {view.forward[0] - axis[0] * along, view.forward[1] - axis[1] * along, view.forward[2] - axis[2] * along};
+                front = norm3(front);
+                if (dot3(front, front) > 0.5f) {
+                    const Mat3 f{axis, front, cross3(axis, front)};
+                    Mat3 k = relative(r, f);
+                    if (cal.set[i]) {
+                        for (int c = 0; c < 3; ++c)
+                            for (int e = 0; e < 3; ++e) k[c][e] = cal.k[i][c][e] * 0.92f + k[c][e] * 0.08f;
+                    }
+                    orthonormalise(k);
+                    cal.k[i] = k;
+                    cal.set[i] = true;
+                }
+            }
+            if (cal.set[i]) {
+                // Column 1 of R K is the bone's front; keep only its part across the bone.
+                const Vec3 front = mat_vec(r, cal.k[i][1]);
+                const float along = dot3(front, axis);
+                const Vec3 across = norm3({front[0] - axis[0] * along, front[1] - axis[1] * along, front[2] - axis[2] * along});
+                if (dot3(across, across) > 0.5f) {
+                    seg.front = across;
+                    seg.has_front = true;
+                }
+            }
+        }
+    }
     view.base = base;
     view.at = std::chrono::steady_clock::now();
     publish_rig(view);
@@ -221,35 +301,11 @@ void apply_ui_hide(std::uintptr_t base) noexcept {
 }
 } // namespace
 
-// Called on the render thread each time a skeleton's pose is handed to the renderer: for the local
-// skater that is the exact pose being drawn this frame, so the X-ray cannot lag the body.
-void on_render_pose(std::uintptr_t animation_interface) noexcept {
-    const auto holder = local_holder.load(std::memory_order_acquire);
-    if (!holder || animation_interface != holder + 0xc0) return;
-    const auto error = GetLastError();
-    try {
-        publish_pose(module_base.load(std::memory_order_relaxed), holder);
-        last_render_pose_ms.store(now_ms(), std::memory_order_relaxed);
-    } catch (...) {
-    }
-    SetLastError(error);
-}
-
 void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
-    static bool hooked = false;
     try {
         const auto component = client_source::detail::first_person_component(base, client);
         std::uintptr_t holder{};
         if (first_person_read(component + 0xa0, &holder, 8) && holder) {
-            module_base.store(base, std::memory_order_relaxed);
-            local_holder.store(holder, std::memory_order_release);
-            if (!hooked) {
-                hooked = true;
-                std::string detail;
-                // The render-time pose is the one before the physics result is applied, so it sits off
-                // the ragdoll; the client-tick read below matches the drawn body. Hook kept off.
-                (void)detail;
-            }
             publish_pose(base, holder);
         }
     } catch (...) {

@@ -15,6 +15,10 @@ struct RigSegment {
     std::array<float, 3> a{}, b{};
     std::array<float, 3> va{}, vb{}; // m/s, from the last two reads
     float radius{}; // metres
+    // Which way the bone's front faces, from the joint's own rotation (so hands, feet and ribs keep
+    // their roll while the body tumbles). Only when has_front; otherwise the body forward is used.
+    std::array<float, 3> front{};
+    bool has_front{};
 };
 struct RigView {
     bool valid{};
@@ -56,6 +60,11 @@ inline std::atomic<bool> &hide_game_ui() {
 // Whether the skater stands upright (head well above the hips), from the last skeleton read.
 inline std::atomic<bool> &rig_upright() {
     static std::atomic<bool> value{};
+    return value;
+}
+// `hom roll 0|1`: take each bone's roll from its joint (on) or from the body forward (off).
+inline std::atomic<bool> &roll_from_joints() {
+    static std::atomic<bool> value{true};
     return value;
 }
 inline std::atomic<bool> &rig_probe_requested() {
