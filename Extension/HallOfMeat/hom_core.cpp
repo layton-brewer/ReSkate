@@ -4,19 +4,18 @@
 
 namespace dingosdk::hall_of_meat {
 const std::vector<Bone> &bones() {
-    // Points follow the Skate games' habit of paying more for the bones that hurt most to lose.
     // The 19 bones of the original's X-ray skeleton (Skate 3 `dem_bones_hom`), in hom_rig.h order.
     static const std::vector<Bone> list{
-        {"Skull", "Head", 250, 0.35f, 5},          {"Neck", "Spine", 400, 0.2f, 2},
-        {"Rib Cage", "Torso", 300, 0.55f, 7},      {"Lower Spine", "Spine", 300, 0.3f, 4},
-        {"Hips", "Torso", 250, 0.35f, 5},          {"Left Bicep", "Arm", 160, 0.45f, 5},
-        {"Right Bicep", "Arm", 160, 0.45f, 5},     {"Left Forearm", "Arm", 130, 0.55f, 6},
-        {"Right Forearm", "Arm", 130, 0.55f, 6},   {"Left Hand", "Arm", 100, 0.7f, 7},
-        {"Right Hand", "Arm", 100, 0.7f, 7},       {"Left Thigh", "Leg", 280, 0.25f, 4},
-        {"Right Thigh", "Leg", 280, 0.25f, 4},     {"Left Calf", "Leg", 160, 0.45f, 5},
-        {"Right Calf", "Leg", 160, 0.45f, 5},      {"Left Ankle", "Leg", 100, 0.65f, 6},
-        {"Right Ankle", "Leg", 100, 0.65f, 6},     {"Left Toes", "Leg", 60, 0.75f, 6},
-        {"Right Toes", "Leg", 60, 0.75f, 6},
+        {"Skull", "Head", 0.35f, 5},          {"Neck", "Spine", 0.2f, 2},
+        {"Rib Cage", "Torso", 0.55f, 7},      {"Lower Spine", "Spine", 0.3f, 4},
+        {"Hips", "Torso", 0.35f, 5},          {"Left Bicep", "Arm", 0.45f, 5},
+        {"Right Bicep", "Arm", 0.45f, 5},     {"Left Forearm", "Arm", 0.55f, 6},
+        {"Right Forearm", "Arm", 0.55f, 6},   {"Left Hand", "Arm", 0.7f, 7},
+        {"Right Hand", "Arm", 0.7f, 7},       {"Left Thigh", "Leg", 0.25f, 4},
+        {"Right Thigh", "Leg", 0.25f, 4},     {"Left Calf", "Leg", 0.45f, 5},
+        {"Right Calf", "Leg", 0.45f, 5},      {"Left Ankle", "Leg", 0.65f, 6},
+        {"Right Ankle", "Leg", 0.65f, 6},     {"Left Toes", "Leg", 0.75f, 6},
+        {"Right Toes", "Leg", 0.75f, 6},
     };
     return list;
 }
@@ -35,6 +34,17 @@ float dist(const std::array<float, 3> &a, const std::array<float, 3> &b) {
     return std::sqrt(x * x + y * y + z * z);
 }
 } // namespace
+
+bool metric_visible(const Result &r, int metric) {
+    switch (metric) {
+    case 0: return r.rotation >= 1.0f;
+    case 1: return r.air_time >= 0.1f;
+    case 2: return r.drop >= 0.5f;
+    case 3: return r.duration_points > 0;
+    case 4: return r.speed_points > 0;
+    }
+    return false;
+}
 
 const char *title_for(int total, std::size_t n) {
     if (n >= 20) return "TOTAL ANNIHILATION";
@@ -77,6 +87,11 @@ void Tracker::track_bones(const Sample &previous, const Sample &now, double dt) 
         // Teleports and respawns move the whole body at once: not a hit.
         if (change > 0 && change <= 60.0f) bone_change_[i] = change;
     }
+    float sum = 0;
+    for (std::size_t i = 0; i < 19; ++i) sum += bone_speeds_[i].back();
+    body_speed_ = sum / 19.0f;
+    const float vertical = static_cast<float>((now.bone_centres[4][1] - previous.bone_centres[4][1]) / dt);
+    hips_vertical_ += (vertical - hips_vertical_) * std::min(1.0f, static_cast<float>(dt) * 8.0f);
 }
 
 // During a bail: a bone breaks when its own middle took a hard enough hit (sturdy bones need more).
@@ -122,15 +137,12 @@ void Tracker::register_impact(float drop) {
 }
 
 void Tracker::score(Result &r) const {
-    const auto &list = bones();
-    int base = 0;
-    for (const auto &b : r.broken) base += list[b.bone].points;
-    r.bone_points = base;
+    r.bone_points = config_.bone_value * static_cast<int>(r.broken.size());
     const auto cap = [&](float value) { return std::min(config_.metric_cap, static_cast<int>(std::max(0.0f, value))); };
     r.air_points = cap(r.air_time * config_.air_scale);
     r.drop_points = cap(r.drop * config_.drop_scale);
     r.duration_points = static_cast<int>(std::max(0.0f, r.duration - config_.duration_start) * config_.duration_scale);
-    r.speed_points = static_cast<int>(r.peak_speed * 3.6f * config_.speed_scale);
+    r.speed_points = cap((r.peak_speed * 3.6f - config_.speed_start) * config_.speed_scale);
     r.rotation_points = static_cast<int>(r.rotation * config_.rotation_scale);
     r.total = r.bone_points + r.air_points + r.drop_points + r.duration_points + r.speed_points + r.rotation_points;
     r.title = title_for(r.total, r.broken.size());
@@ -162,7 +174,7 @@ bool Tracker::update(const Sample &s) {
         } else {
             upright_idle_since_ = -1;
         }
-        if (s.bones_valid && !s.upright && off_board) {
+        if (s.bones_valid && s.lying && off_board) {
             if (down_since_ < 0) {
                 down_since_ = s.time;
                 down_start_ = s;
@@ -174,9 +186,16 @@ bool Tracker::update(const Sample &s) {
             float torso = std::max({bone_change_[2], bone_change_[3], bone_change_[4]}), any = 0;
             for (const float c : bone_change_) any = std::max(any, c);
             if (off_board && (torso >= config_.hit_torso || any >= config_.hit_any)) hit_time_ = s.time;
+            for (std::size_t i = 0; i < 19; ++i)
+                if (bone_change_[i] > 0 && (s.time - recent_hit_time_[i] > 3.0 || bone_change_[i] >= recent_hit_[i])) {
+                    recent_hit_[i] = bone_change_[i];
+                    recent_hit_time_[i] = s.time;
+                }
         }
         const bool wipeout = s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state);
-        const bool thrown = armed_ && down_since_ >= 0 && s.time - down_since_ >= config_.down_time && hit_time_ >= 0 && s.time - hit_time_ <= 0.8 &&
+        // On the ground: a spread-eagle glide or a dive is down and can jolt, but it keeps sinking.
+        const bool grounded = std::abs(hips_vertical_) < 1.5f;
+        const bool thrown = armed_ && grounded && down_since_ >= 0 && s.time - down_since_ >= config_.down_time && hit_time_ >= 0 && s.time - hit_time_ <= 0.8 &&
                             hit_time_ >= down_since_ - 0.4;
         if (wipeout) trigger_ = "wipeout state";
         else if (thrown) trigger_ = "hit and down";
@@ -195,10 +214,39 @@ bool Tracker::update(const Sample &s) {
             slow_since_ = -1;
             air_start_ = -1;
             live_.peak_speed = s.speed;
+            frozen_ = false;
+            still_since_ = -1;
+            // The impact that showed this was a crash came before the bail was recognised: count it.
+            if (thrown) {
+                const auto &list = bones();
+                for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
+                    if (s.time - recent_hit_time_[i] > 3.0 || recent_hit_[i] <= 0) continue;
+                    const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
+                    live_.damage[i] = std::max(live_.damage[i], recent_hit_[i] / needed);
+                    if (recent_hit_[i] >= needed && !is_broken_[i]) {
+                        is_broken_[i] = true;
+                        live_.broken.push_back({i, recent_hit_[i], recent_hit_time_[i]});
+                        live_.biggest_hit = std::max(live_.biggest_hit, recent_hit_[i]);
+                    }
+                }
+            }
+            recent_hit_ = {};
         }
     } else if (have_previous_) {
         const double dt = s.time - previous_.time;
-        if (dt > 0 && dt < 0.25) {
+        const double elapsed = s.time - start_.time;
+        {
+            const float moving = s.bones_valid ? body_speed_ : s.speed;
+            if (moving < config_.still_speed && elapsed > 0.5) {
+                if (still_since_ < 0) still_since_ = s.time;
+                if (s.time - still_since_ >= config_.still_time) frozen_ = true;
+            } else {
+                still_since_ = -1;
+                // Set off again (rolling down a ramp after a pause): the bail carries on counting.
+                if (frozen_ && moving > 2.0f) frozen_ = false;
+            }
+        }
+        if (!frozen_ && dt > 0 && dt < 0.25) {
             const float drop = previous_.speed - s.speed;
             if (s.bones_valid && previous_.bones_valid) {
                 if (drop >= config_.impact_threshold) ++live_.impacts;
@@ -206,24 +254,32 @@ bool Tracker::update(const Sample &s) {
             } else if (drop >= config_.impact_threshold) {
                 register_impact(drop);
             }
-            if (s.airborne) {
+            // In the air: the board says so while riding; off it, the hips are rising or falling freely.
+            float hips_vertical = 0;
+            if (s.bones_valid && previous_.bones_valid) hips_vertical = static_cast<float>((s.bone_centres[4][1] - previous_.bone_centres[4][1]) / dt);
+            const bool flying = s.airborne || (s.bones_valid && std::abs(hips_vertical) > 1.5f);
+            if (flying) {
                 if (air_start_ < 0) air_start_ = previous_.time;
             } else if (air_start_ >= 0) {
                 live_.air_time += static_cast<float>(s.time - air_start_);
                 air_start_ = -1;
             }
         }
-        live_.distance = dist(s.position, start_.position);
-        live_.peak_speed = std::max(live_.peak_speed, s.speed);
-        live_.peak_height = std::max(live_.peak_height, s.position[1] - start_.position[1]);
-        live_.drop = std::max(live_.drop, start_.position[1] - s.position[1]);
-        {
+        if (!frozen_) {
+            live_.distance = dist(s.position, start_.position);
+            live_.peak_speed = std::max(live_.peak_speed, s.speed);
+            live_.peak_height = std::max(live_.peak_height, s.position[1] - start_.position[1]);
+            live_.drop = std::max(live_.drop, start_.position[1] - s.position[1]);
             float turn = s.heading - previous_.heading;
             while (turn > 180.0f) turn -= 360.0f;
             while (turn < -180.0f) turn += 360.0f;
-            if (dt > 0 && dt < 0.25) live_.rotation += std::abs(turn);
+            // Only while the body is really moving: a still body's heading jitters.
+            if (dt > 0 && dt < 0.25 && (s.bones_valid ? body_speed_ : s.speed) > 1.0f) live_.rotation += std::abs(turn);
+            live_.duration = static_cast<float>(elapsed);
+        } else if (air_start_ >= 0) {
+            live_.air_time += static_cast<float>(s.time - air_start_);
+            air_start_ = -1;
         }
-        live_.duration = static_cast<float>(s.time - start_.time);
         if (s.speed < config_.settle_speed) {
             if (slow_since_ < 0) slow_since_ = s.time;
         } else {
@@ -240,12 +296,13 @@ bool Tracker::update(const Sample &s) {
             upright_since_ = -1;
         }
         // Back on the board ends it at once.
-        const bool riding = s.physics_state >= 100 && s.physics_state < 300 && live_.duration > 0.3f;
+        const bool riding = s.physics_state >= 100 && s.physics_state < 300 && elapsed > 0.3;
         const bool recovered = riding || (s.bones_valid ? (went_down_ && upright_since_ >= 0 && s.time - upright_since_ >= 0.4 && s.speed < 3.0f)
-                                                       : (s.physics_state != config_.wipeout_state && live_.duration > 0.5f && s.speed < 2.0f));
-        if (settled || recovered || live_.duration > config_.max_duration) {
+                                                       : (s.physics_state != config_.wipeout_state && elapsed > 0.5 && s.speed < 2.0f));
+        if (settled || recovered || elapsed > config_.max_duration) {
             if (air_start_ >= 0) live_.air_time += static_cast<float>(s.time - air_start_);
-            if (live_.duration >= config_.min_duration) {
+            air_start_ = -1;
+            if (elapsed >= config_.min_duration) {
                 score(live_);
                 last_ = live_;
                 phase_ = Phase::finished;
@@ -255,7 +312,11 @@ bool Tracker::update(const Sample &s) {
             }
         }
     }
-    if (phase_ == Phase::bailing) score(live_);
+    if (phase_ == Phase::bailing) {
+        score(live_);
+        for (int k = 0; k < 5; ++k)
+            if (live_.shown_at[k] < 0 && metric_visible(live_, k)) live_.shown_at[k] = s.time;
+    }
     previous_ = s;
     have_previous_ = true;
     return finished;

@@ -6,9 +6,8 @@
 
 // Hall Of Meat scoring core. Pure logic with no game or UI dependencies, so it can be unit tested:
 // feed it one Sample per client tick and it tracks a bail from the moment the skater wipes out
-// until they settle, detects impacts from sudden speed loss, breaks bones from those impacts and
-// scores the whole bail. Scoring follows the Skate series: bones broken, distance, air time, with
-// a multiplier for how much of the skeleton went.
+// until they are back on their feet, breaks bones from the hits each X-ray bone takes and scores
+// the bail the way Skate 3's HUD does: 500 a bone, plus air, drop, bail time, speed and rotation.
 namespace dingosdk::hall_of_meat {
 
 struct Sample {
@@ -22,13 +21,13 @@ struct Sample {
     // Middle of each X-ray bone in world space (hom_rig.h order), when the skeleton could be read.
     bool bones_valid{};
     bool upright{}; // head well above the hips
+    bool lying{};   // head no higher than ~0.3 m above the hips: the body is down, not crouched
     std::array<std::array<float, 3>, 19> bone_centres{};
 };
 
 struct Bone {
     const char *name;
     const char *region;
-    int points;      // base score when broken
     float fragility; // 0..1, how readily it breaks
     float weight;    // how likely an impact is to land on it
 };
@@ -58,7 +57,12 @@ struct Result {
     int bone_points{}, rotation_points{}, air_points{}, drop_points{}, duration_points{}, speed_points{};
     int total{};
     std::string title;
+    // When each HUD row first appeared (rotation, air, drop, bail time, speed; -1 = not yet). The
+    // original stacks rows in that order, the first one nearest the score.
+    std::array<double, 5> shown_at{-1, -1, -1, -1, -1};
 };
+// Whether a metric has a row on the HUD yet (0 rotation, 1 air, 2 drop, 3 bail time, 4 speed).
+bool metric_visible(const Result &r, int metric);
 
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
@@ -66,7 +70,9 @@ struct Config {
     float bone_break_speed = 11.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float hit_torso = 3.5f;             // m/s the chest or hips lose in ~0.13 s: the body hit something
     float hit_any = 9.0f;               // or any bone does (a limb slammed hard)
-    float down_time = 0.30f;            // seconds the body must be off its feet for an off-board bail
+    float down_time = 0.30f;            // seconds the body must be lying for an off-board bail
+    float still_speed = 0.5f;           // bones' average speed below which the body has stopped
+    float still_time = 0.5f;            // for this long: the bail's score is final
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
@@ -74,10 +80,12 @@ struct Config {
     // Calibrated against the original's HUD (video): air 6.4 s and drops past ~52 m both read 10,000;
     // a 7.10 s bail read 7,750 and 8.26 s read 11,333; 36 km/h read 785.
     float air_scale = 1850.0f; // points per second of air, capped at metric_cap
-    float drop_scale = 190.0f; // points per metre dropped, capped
+    float drop_scale = 182.0f; // points per metre dropped, capped (31.5 m read 5,740)
     float duration_scale = 3089.0f;
     float duration_start = 4.59f; // seconds before a bail starts paying
-    float speed_scale = 21.8f;    // points per km/h of peak speed
+    float speed_scale = 190.0f;   // points per km/h of peak speed past speed_start (65.5 km/h read 6,383)
+    float speed_start = 31.9f;    // km/h before speed pays (36 km/h read 785)
+    int bone_value = 500;         // every broken bone (the chip read x1 500, x2 1,000)
     float rotation_scale = 5.0f;  // points per degree turned
     int metric_cap = 10000;
 };
@@ -122,6 +130,16 @@ private:
     Sample down_start_{};
     bool armed_{true}; // the skater has been on their feet since the last bail
     std::string trigger_;
+    // Strongest hit each bone took in the last 3 s while not bailing, applied when a bail
+    // starts after its own impact (an off-board crash is only recognised after the hit).
+    std::array<float, 19> recent_hit_{};
+    std::array<double, 19> recent_hit_time_{};
+    float hips_vertical_{}; // smoothed up/down speed of the hips (m/s)
+    // Once the body has stopped moving the bail's numbers are final, like the original's
+    // wipeout-over: the X-ray stays until the skater is up, the score no longer counts.
+    bool frozen_{};
+    double still_since_{-1};
+    float body_speed_{};
 };
 
 const char *title_for(int total, std::size_t bones_broken);

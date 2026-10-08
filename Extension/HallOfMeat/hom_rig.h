@@ -63,8 +63,22 @@ inline std::atomic<bool> &rig_upright() {
     return value;
 }
 // `hom roll 0|1`: take each bone's roll from its joint (on) or from the body forward (off).
+// Whether the body is lying down (head no more than ~0.3 m above the hips).
+inline std::atomic<bool> &rig_lying() {
+    static std::atomic<bool> value{};
+    return value;
+}
+// Whether the last skeleton came from the ragdoll's physics bodies (else the animation pose).
+inline std::atomic<bool> &rig_from_bodies() {
+    static std::atomic<bool> value{};
+    return value;
+}
 inline std::atomic<bool> &roll_from_joints() {
     static std::atomic<bool> value{true};
+    return value;
+}
+inline std::atomic<bool> &phys_probe_requested() {
+    static std::atomic<bool> value{};
     return value;
 }
 inline std::atomic<bool> &rig_probe_requested() {

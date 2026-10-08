@@ -1,18 +1,16 @@
 #include "hall_of_meat_hud.h"
 #include "Extension/Console/commands.h"
 
-// The `hom` console commands: start, stop and inspect a Hall Of Meat challenge.
+// The `hom` console commands: Hall Of Meat status and diagnostics.
 namespace dingosdk::console {
 void register_hall_of_meat_commands(Commands &registry) {
     struct Verb {
         const char *name, *description, *usage;
     };
     const Verb verbs[]{
-        {"start", "Start a timed Hall Of Meat challenge", "[number|name]"},
-        {"stop", "Stop the Hall Of Meat challenge", nullptr},
-        {"list", "List the Hall Of Meat challenges", nullptr},
-        {"status", "How the Hall Of Meat challenge is going", nullptr},
+        {"status", "Hall Of Meat state and best bail", nullptr},
         {"rig", "Log the skater skeleton (diagnostic)", nullptr},
+        {"phys", "Log the skater physics bodies (diagnostic)", nullptr},
         {"roll", "X-ray bone roll from the joints (1) or from the body forward (0)", "0|1"},
     };
     for (const auto &verb : verbs) {
