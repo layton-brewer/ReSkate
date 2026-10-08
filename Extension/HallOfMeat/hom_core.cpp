@@ -56,29 +56,36 @@ void Tracker::reset() {
 // harder for the sturdy ones. This is what puts the break where the body actually struck.
 void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, double dt) {
     const auto &list = bones();
-    std::array<std::array<float, 3>, 19> velocity{};
-    for (std::size_t i = 0; i < 19; ++i)
-        for (std::size_t k = 0; k < 3; ++k)
-            velocity[i][k] = static_cast<float>((now.bone_centres[i][k] - previous.bone_centres[i][k]) / dt);
-    if (have_bone_velocity_) {
-        for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
-            // Speed the bone's middle lost this tick: a hit stops it, a swing only turns it.
-            const auto length = [](const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
-            const float change = length(bone_velocity_[i]) - length(velocity[i]);
-            // Teleports and respawns move the whole body at once: not a hit.
-            if (change > 60.0f) continue;
-            const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
-            if (now.time - start_.time < 0.15) continue; // the wipeout's own first jolt
-            live_.damage[i] = std::max(live_.damage[i], change / needed);
-            if (change >= needed && !is_broken_[i]) {
-                is_broken_[i] = true;
-                live_.broken.push_back({i, change, now.time});
-                live_.biggest_hit = std::max(live_.biggest_hit, change);
-            }
+    const auto length = [](const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
+    // Shift the history and add this tick's speeds.
+    for (std::size_t k = 0; k + 1 < bone_times_.size(); ++k) bone_times_[k] = bone_times_[k + 1];
+    bone_times_.back() = now.time;
+    bone_samples_ = std::min<int>(bone_samples_ + 1, static_cast<int>(bone_times_.size()));
+    for (std::size_t i = 0; i < 19; ++i) {
+        std::array<float, 3> v{};
+        for (std::size_t k = 0; k < 3; ++k) v[k] = static_cast<float>((now.bone_centres[i][k] - previous.bone_centres[i][k]) / dt);
+        auto &h = bone_speeds_[i];
+        for (std::size_t k = 0; k + 1 < h.size(); ++k) h[k] = h[k + 1];
+        h.back() = length(v);
+    }
+    if (bone_samples_ < 3 || now.time - start_.time < 0.15) return; // the wipeout's own first jolt
+    for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
+        // Speed the bone's middle lost over the last ~0.12 s: a hit stops it, a swing only turns it.
+        const auto &h = bone_speeds_[i];
+        float before = 0;
+        for (std::size_t k = h.size() - static_cast<std::size_t>(bone_samples_); k + 1 < h.size(); ++k)
+            if (now.time - bone_times_[k] <= 0.13) before = std::max(before, h[k]);
+        const float change = before - h.back();
+        // Teleports and respawns move the whole body at once: not a hit.
+        if (change > 60.0f || change <= 0) continue;
+        const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
+        live_.damage[i] = std::max(live_.damage[i], change / needed);
+        if (change >= needed && !is_broken_[i]) {
+            is_broken_[i] = true;
+            live_.broken.push_back({i, change, now.time});
+            live_.biggest_hit = std::max(live_.biggest_hit, change);
         }
     }
-    bone_velocity_ = velocity;
-    have_bone_velocity_ = true;
 }
 
 void Tracker::register_impact(float drop) {
@@ -125,13 +132,23 @@ bool Tracker::update(const Sample &s) {
     bool finished = false;
     if (phase_ == Phase::finished) phase_ = Phase::idle;
     if (phase_ == Phase::idle) {
-        if (s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state)) {
+        // A bail: the wipeout state, or the skater coming off the board straight into a ragdoll
+        // (many slams go from the air directly to the off-board state, never through the wipeout one).
+        const bool on_board = s.physics_state >= 100 && s.physics_state < 300;
+        if (on_board) last_on_board_ = s.time;
+        const bool wipeout = s.physics_state == config_.wipeout_state && (!have_previous_ || previous_.physics_state != config_.wipeout_state);
+        const bool thrown = s.bones_valid && !s.upright && s.speed > 1.5f && s.physics_state >= 300 && last_on_board_ >= 0 && s.time - last_on_board_ < 1.0;
+        if (wipeout || thrown) {
+            last_on_board_ = -1; // one bail per time off the board
             phase_ = Phase::bailing;
             live_ = {};
             live_.serial = ++serial_;
             rng_ = 0xC0FFEEull * live_.serial + 17;
             is_broken_.assign(bones().size(), false);
             have_bone_velocity_ = false;
+            bone_samples_ = 0;
+            went_down_ = !s.upright;
+            upright_since_ = -1;
             start_ = s;
             slow_since_ = -1;
             air_start_ = -1;
@@ -174,8 +191,16 @@ bool Tracker::update(const Sample &s) {
         const bool settled = slow_since_ >= 0 && s.time - slow_since_ >= config_.settle_time;
         // With the skeleton: over once the skater is back on their feet. Without it: out of the
         // wipeout state and slow.
-        const bool recovered = s.bones_valid ? (s.upright && live_.duration > 0.6f)
-                                             : (s.physics_state != config_.wipeout_state && live_.duration > 0.5f && s.speed < 2.0f);
+        if (s.bones_valid && !s.upright) went_down_ = true;
+        if (s.bones_valid && s.upright) {
+            if (upright_since_ < 0) upright_since_ = s.time;
+        } else {
+            upright_since_ = -1;
+        }
+        // Back on the board ends it at once.
+        const bool riding = s.physics_state >= 100 && s.physics_state < 300 && live_.duration > 0.3f;
+        const bool recovered = riding || (s.bones_valid ? (went_down_ && upright_since_ >= 0 && s.time - upright_since_ >= 0.4 && s.speed < 3.0f)
+                                                       : (s.physics_state != config_.wipeout_state && live_.duration > 0.5f && s.speed < 2.0f));
         if (settled || recovered || live_.duration > config_.max_duration) {
             if (air_start_ >= 0) live_.air_time += static_cast<float>(s.time - air_start_);
             if (live_.duration >= config_.min_duration) {

@@ -63,7 +63,7 @@ struct Result {
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
-    float bone_break_speed = 16.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
+    float bone_break_speed = 8.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
@@ -106,6 +106,13 @@ private:
     std::vector<bool> is_broken_;
     std::array<std::array<float, 3>, 19> bone_velocity_{};
     bool have_bone_velocity_{};
+    // Each bone's recent speeds (newest last), to measure how much it lost over a short window.
+    std::array<std::array<float, 8>, 19> bone_speeds_{};
+    std::array<double, 8> bone_times_{};
+    int bone_samples_{};
+    double last_on_board_{-1};  // when the skater was last riding or in the air on the board
+    bool went_down_{};          // the body has been off its feet during this bail
+    double upright_since_{-1};
     void break_bones_from_rig(const Sample &previous, const Sample &now, double dt);
 };
 
