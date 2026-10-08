@@ -22,6 +22,7 @@ struct RigView {
     std::array<float, 3> forward{0, 0, 1}; // the skater's body forward (pelvis local +Y)
     std::uintptr_t base{};
     std::chrono::steady_clock::time_point at{};
+    float period{0.016f}; // seconds between the last two reads
 };
 namespace rig_detail {
 inline std::mutex mutex;
@@ -32,6 +33,7 @@ inline void publish_rig(const RigView &view) noexcept {
     RigView next = view;
     const auto &previous = rig_detail::latest;
     const double dt = std::chrono::duration<double>(view.at - previous.at).count();
+    if (previous.valid && dt > 0.003 && dt < 0.12) next.period = static_cast<float>(dt);
     if (previous.valid && dt > 0.003 && dt < 0.12)
         for (std::size_t i = 0; i < rig_bones; ++i)
             for (std::size_t k = 0; k < 3; ++k) {

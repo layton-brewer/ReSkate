@@ -374,11 +374,13 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
     if (rig.valid) {
         // The pose was read at the client tick; carry each bone on by the time since, so the X-ray
         // keeps up with the body it is drawn over.
-        const float ahead = std::clamp(static_cast<float>(std::chrono::duration<double>(Clock::now() - rig.at).count()) + 0.012f, 0.0f, 0.06f);
+        // The animation behind a read is a frame older than the tick that read it, so lead by the time
+        // since the read plus one more frame.
+        const float ahead = std::clamp(static_cast<float>(std::chrono::duration<double>(Clock::now() - rig.at).count()) + rig.period + 0.004f, 0.0f, 0.09f);
         for (auto &seg : rig.bones)
             for (std::size_t k = 0; k < 3; ++k) {
-                seg.a[k] += std::clamp(seg.va[k], -40.0f, 40.0f) * ahead;
-                seg.b[k] += std::clamp(seg.vb[k], -40.0f, 40.0f) * ahead;
+                seg.a[k] += std::clamp(seg.va[k], -30.0f, 30.0f) * ahead;
+                seg.b[k] += std::clamp(seg.vb[k], -30.0f, 30.0f) * ahead;
             }
     }
     BoneProjector projector;
