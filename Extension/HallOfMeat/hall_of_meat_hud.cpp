@@ -347,8 +347,13 @@ void draw_xray(ImDrawList *draw, const Result &r, double now, float fade, float 
             if (!projector.project(seg.a, a, da) || !projector.project(seg.b, b, db)) continue;
             const float px = std::clamp(seg.radius * projector.focal * 2.0f / (da + db), 1.5f, 80.0f);
             const ImU32 glow = broken ? IM_COL32(255, 110, 40, 255) : IM_COL32(170, 210, 255, 255);
-            for (int layer = 3; layer >= 1; --layer)
-                draw->AddLine(a, b, alpha(glow, (broken ? 0.12f : 0.07f) * fade), px * (1.4f + 1.1f * layer));
+            // A soft bloom: faint round puffs along the bone (lines would draw hard-edged slabs).
+            if (!meshes || broken)
+                for (int k = 0; k <= 4; ++k) {
+                    const float t = k / 4.0f;
+                    const ImVec2 at(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+                    draw->AddCircleFilled(at, px * 2.2f, alpha(glow, (broken ? 0.045f : 0.025f) * fade), 20);
+                }
             if (!meshes) {
                 draw_bone(draw, i, a, b, px, broken, broke_at[i], fade);
                 continue;
@@ -584,7 +589,7 @@ void draw_hall_of_meat_hud() {
     draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
     {
         // Darkness: deep once the body is settling (as the original reveals its X-ray), lighter mid-tumble.
-        const float dark_target = live ? ((s.tracker.live().duration > 1.5f || ImGui::GetIO().DeltaTime <= 0) ? 0.72f : 0.35f) : 0.0f;
+        const float dark_target = live ? ((s.tracker.live().duration > 1.5f || ImGui::GetIO().DeltaTime <= 0) ? 0.45f : 0.2f) : 0.0f;
         s.darkness += (dark_target - s.darkness) * std::min(1.0f, ImGui::GetIO().DeltaTime * 4.0f);
         if (live || s.darkness > 0.02f) draw_xray(draw, r, now, live ? 1.0f : fade, s.darkness);
     }

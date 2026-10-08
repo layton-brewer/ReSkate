@@ -63,7 +63,7 @@ struct Result {
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
-    float bone_break_speed = 8.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
+    float bone_break_speed = 11.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
