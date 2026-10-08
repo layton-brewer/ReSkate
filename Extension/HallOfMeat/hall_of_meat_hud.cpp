@@ -1,6 +1,12 @@
 #include "hall_of_meat_hud.h"
 #include "hom_art.h"
 #include "hom_core.h"
+#include "hom_rig.h"
+#include "Engine/Core/Platform/memory.h"
+#include "Engine/Game/Build/addresses.h"
+#include "Engine/Game/Build/20260929/engine.h"
+#include "Engine/Game/Build/20260929/client_source_spawn.h"
+#include "Engine/Game/UI/game_view.h"
 #include "Engine/Core/Log/logging.h"
 #include "Extension/Trainer/trainer.h"
 #include <algorithm>
@@ -209,6 +215,128 @@ void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade
     }
 }
 
+// The camera as it is now (the game moves it after the client tick), as the nametags read it.
+bool live_camera(std::uintptr_t base, std::array<float, 16> &world, float &fov) {
+    const auto view = latest_game_view();
+    if (!view) return false;
+    world = view->world;
+    fov = view->vertical_fov;
+    if (base && view->camera && !(view->camera & 7)) {
+        std::uintptr_t vtable{};
+        if (memory::peek(view->camera, vtable) &&
+            (vtable == base + addr::engine::camera_vtable || vtable == base + addr::client_source_spawn::free_camera_vtable)) {
+            std::array<float, 16> live{};
+            float live_fov{};
+            bool sound = memory::peek(view->camera + 0x50, live) && memory::peek(view->camera + 0xac, live_fov) && std::isfinite(live_fov) &&
+                         live_fov > 1 && live_fov < 175;
+            for (const auto value : live) sound = sound && std::isfinite(value) && std::abs(value) < 1e7f;
+            if (sound) {
+                world = live;
+                fov = live_fov;
+            }
+        }
+    }
+    return fov > 1 && fov < 175;
+}
+
+struct Projector {
+    std::array<float, 16> m{};
+    float focal{};
+    ImVec2 centre{};
+    // Screen point and pixels per metre at that depth; false behind the camera.
+    bool operator()(const std::array<float, 3> &p, ImVec2 &at, float &per_metre) const {
+        const float dx = p[0] - m[12], dy = p[1] - m[13], dz = p[2] - m[14];
+        const float depth = -(dx * m[8] + dy * m[9] + dz * m[10]);
+        if (depth < 0.15f) return false;
+        const float side = dx * m[0] + dy * m[1] + dz * m[2], height = dx * m[4] + dy * m[5] + dz * m[6];
+        at = ImVec2(centre.x + side * focal / depth, centre.y - height * focal / depth);
+        per_metre = focal / depth;
+        return true;
+    }
+};
+
+// One X-ray bone: a pale shaft with knobbed ends, glowing red and pulsing once broken, with a
+// white flash and a crack across it at the moment it went.
+void draw_bone(ImDrawList *draw, std::size_t index, ImVec2 a, ImVec2 b, float r, bool broken, float since_break, float fade) {
+    const ImU32 healthy = IM_COL32(190, 235, 255, 255), hurt = IM_COL32(255, 70, 40, 255), hot = IM_COL32(255, 200, 120, 255);
+    const float pulse = broken ? 0.75f + 0.25f * std::sin(static_cast<float>(ImGui::GetTime()) * 9.0f) : 1.0f;
+    const ImU32 colour = broken ? hurt : healthy;
+    const float base_alpha = (broken ? 0.95f : 0.42f) * fade;
+    // Glow.
+    for (int layer = 3; layer >= 1; --layer) {
+        const float w = r * (1.0f + 0.9f * layer) * (broken ? 1.3f : 1.0f);
+        const float a_ = base_alpha * (broken ? 0.16f : 0.07f) * pulse;
+        if (index == 0) draw->AddCircleFilled(ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), w * 1.2f, alpha(colour, a_), 24);
+        else draw->AddLine(a, b, alpha(colour, a_), w * 2.0f);
+    }
+    if (index == 0) {
+        // Skull: a round cranium with dark sockets.
+        const ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+        draw->AddCircleFilled(c, r * 1.15f, alpha(colour, base_alpha), 24);
+        draw->AddCircleFilled(ImVec2(c.x - r * 0.4f, c.y + r * 0.15f), r * 0.28f, alpha(IM_COL32(10, 12, 30, 255), base_alpha * 0.8f), 12);
+        draw->AddCircleFilled(ImVec2(c.x + r * 0.4f, c.y + r * 0.15f), r * 0.28f, alpha(IM_COL32(10, 12, 30, 255), base_alpha * 0.8f), 12);
+    } else {
+        const float shaft = index == 2 || index == 4 ? r * 1.6f : r * 1.1f;
+        draw->AddLine(a, b, alpha(colour, base_alpha), shaft);
+        draw->AddCircleFilled(a, r * 0.95f, alpha(colour, base_alpha), 16);
+        draw->AddCircleFilled(b, r * 0.95f, alpha(colour, base_alpha), 16);
+        if (index == 2) {
+            // Rib cage: ribs across the column.
+            const ImVec2 d(b.x - a.x, b.y - a.y);
+            const float l = std::max(1.0f, std::sqrt(d.x * d.x + d.y * d.y));
+            const ImVec2 n(-d.y / l, d.x / l);
+            for (int i = 1; i <= 4; ++i) {
+                const float t = i / 5.0f;
+                const ImVec2 m(a.x + d.x * t, a.y + d.y * t);
+                draw->AddLine(ImVec2(m.x - n.x * r * 2.2f, m.y - n.y * r * 2.2f), ImVec2(m.x + n.x * r * 2.2f, m.y + n.y * r * 2.2f),
+                              alpha(colour, base_alpha * 0.85f), std::max(1.5f, r * 0.35f));
+            }
+        }
+    }
+    if (broken) {
+        // The crack, and the flash when it snapped.
+        const ImVec2 m((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+        const ImVec2 d(b.x - a.x, b.y - a.y);
+        const float l = std::max(1.0f, std::sqrt(d.x * d.x + d.y * d.y));
+        const ImVec2 n(-d.y / l, d.x / l), t(d.x / l, d.y / l);
+        const float s = r * 1.6f;
+        const ImVec2 zig[]{ImVec2(m.x - n.x * s, m.y - n.y * s), ImVec2(m.x - n.x * s * 0.3f + t.x * s * 0.35f, m.y - n.y * s * 0.3f + t.y * s * 0.35f),
+                           ImVec2(m.x + n.x * s * 0.3f - t.x * s * 0.35f, m.y + n.y * s * 0.3f - t.y * s * 0.35f), ImVec2(m.x + n.x * s, m.y + n.y * s)};
+        draw->AddPolyline(zig, 4, alpha(IM_COL32(20, 0, 0, 255), 0.9f * fade), 0, std::max(1.5f, r * 0.35f));
+        if (since_break < 0.6f) {
+            const float k = since_break / 0.6f;
+            draw->AddCircleFilled(m, s * (1.0f + 3.0f * k), alpha(hot, (1.0f - k) * 0.55f * fade), 24);
+            draw->AddCircle(m, s * (1.5f + 5.0f * k), alpha(IM_COL32_WHITE, (1.0f - k) * 0.8f * fade), 32, std::max(2.0f, r * 0.4f));
+        }
+    }
+}
+
+void draw_xray(ImDrawList *draw, const Result &r, double now, float fade) {
+    const auto rig = hall_of_meat::latest_rig();
+    if (!rig.valid) return;
+    Projector project;
+    float fov{};
+    if (!live_camera(rig.base, project.m, fov)) return;
+    const auto display = ImGui::GetIO().DisplaySize;
+    project.focal = display.y / (2.0f * std::tan(fov * 3.14159265f / 360.0f));
+    project.centre = ImVec2(display.x * 0.5f, display.y * 0.5f);
+    std::array<float, hall_of_meat::rig_bones> broke_at{};
+    broke_at.fill(-1.0f);
+    for (const auto &b : r.broken)
+        if (b.bone < broke_at.size()) broke_at[b.bone] = static_cast<float>(std::max(0.0, now - b.time));
+    // Healthy bones first, broken ones on top.
+    for (int pass = 0; pass < 2; ++pass)
+        for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i) {
+            const bool broken = broke_at[i] >= 0.0f;
+            if (broken != (pass == 1)) continue;
+            const auto &seg = rig.bones[i];
+            ImVec2 a, b;
+            float pa{}, pb{};
+            if (!project(seg.a, a, pa) || !project(seg.b, b, pb)) continue;
+            draw_bone(draw, i, a, b, std::clamp(seg.radius * (pa + pb) * 0.5f, 1.5f, 80.0f), broken, broke_at[i], fade);
+        }
+}
+
 std::string clock_text(double seconds) {
     const int total = std::max(0, static_cast<int>(std::ceil(seconds)));
     return std::format("{:02}:{:02}", total / 60, total % 60);
@@ -284,6 +412,11 @@ void hall_of_meat_tick() {
     in.airborne = telemetry.airborne;
     in.physics_state = telemetry.physics_state;
     in.heading = telemetry.heading;
+    if (const auto rig = hall_of_meat::latest_rig(); rig.valid) {
+        in.bones_valid = true;
+        for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i)
+            for (std::size_t k = 0; k < 3; ++k) in.bone_centres[i][k] = (rig.bones[i].a[k] + rig.bones[i].b[k]) * 0.5f;
+    }
     // Calibration log: the physics states a bail passes through.
     if (s.tracker.phase() == Phase::bailing && in.physics_state != s.last_state)
         logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: physics state {} -> {} at {:.1f} km/h.",
@@ -294,6 +427,14 @@ void hall_of_meat_tick() {
     if (!was_bailing && s.tracker.phase() == Phase::bailing) {
         s.started = now;
         s.shown_total = 0;
+        // Calibration: the X-ray skull and pelvis against the skater's own position.
+        if (const auto rig = hall_of_meat::latest_rig(); rig.valid)
+            logging::log(logging::Level::info, logging::Channel::assets,
+                         "Hall Of Meat: skater ({:.2f}, {:.2f}, {:.2f}), skull ({:.2f}, {:.2f}, {:.2f}), hips ({:.2f}, {:.2f}, {:.2f}).",
+                         in.position[0], in.position[1], in.position[2], rig.bones[0].a[0], rig.bones[0].a[1], rig.bones[0].a[2],
+                         rig.bones[4].a[0], rig.bones[4].a[1], rig.bones[4].a[2]);
+        else
+            logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: skeleton not readable at bail start.");
     }
     if (done) {
         const auto &r = s.tracker.result();
@@ -361,6 +502,10 @@ std::string hall_of_meat_command(std::string_view verb, const std::vector<std::s
         s.session.ends = now + s.session.challenge.minutes * 60.0;
         return "Hall Of Meat: started \"" + list[index].title + "\".";
     }
+    if (verb == "rig") {
+        hall_of_meat::rig_probe_requested().store(true);
+        return "Hall Of Meat: reading the skeleton, see ReSkate.log.";
+    }
     if (verb == "stop") {
         s.session = {};
         return "Hall Of Meat: stopped.";
@@ -399,6 +544,7 @@ void draw_hall_of_meat_hud() {
     s.shown_total += (target - s.shown_total) * std::min(1.0f, ImGui::GetIO().DeltaTime * 8.0f);
     if (std::abs(target - s.shown_total) < 1.0f) s.shown_total = target;
     draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
+    draw_xray(draw, r, now, live ? 1.0f : fade);
     draw_block(draw, r, s.shown_total, fade, scale, now, s.started);
 }
 } // namespace dingosdk::overlay

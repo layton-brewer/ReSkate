@@ -19,6 +19,9 @@ struct Sample {
     bool airborne{};
     std::uint32_t physics_state{};
     float heading{}; // degrees, 0..360
+    // Middle of each X-ray bone in world space (hom_rig.h order), when the skeleton could be read.
+    bool bones_valid{};
+    std::array<std::array<float, 3>, 19> bone_centres{};
 };
 
 struct Bone {
@@ -33,6 +36,7 @@ const std::vector<Bone> &bones();
 struct BrokenBone {
     std::size_t bone{};
     float impact{}; // m/s of speed lost in the hit that broke it
+    double time{};  // when it broke (Sample::time)
 };
 
 struct Result {
@@ -56,6 +60,7 @@ struct Result {
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
+    float bone_break_speed = 9.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
@@ -96,6 +101,9 @@ private:
     std::uint32_t serial_{};
     std::uint64_t rng_{};
     std::vector<bool> is_broken_;
+    std::array<std::array<float, 3>, 19> bone_velocity_{};
+    bool have_bone_velocity_{};
+    void break_bones_from_rig(const Sample &previous, const Sample &now, double dt);
 };
 
 const char *title_for(int total, std::size_t bones_broken);

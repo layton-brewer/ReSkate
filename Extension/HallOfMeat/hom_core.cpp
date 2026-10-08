@@ -5,22 +5,18 @@
 namespace dingosdk::hall_of_meat {
 const std::vector<Bone> &bones() {
     // Points follow the Skate games' habit of paying more for the bones that hurt most to lose.
+    // The 19 bones of the original's X-ray skeleton (Skate 3 `dem_bones_hom`), in hom_rig.h order.
     static const std::vector<Bone> list{
-        {"Skull", "Head", 250, 0.35f, 5},          {"Jaw", "Head", 150, 0.55f, 4},
-        {"Nose", "Head", 60, 0.7f, 4},             {"Cheekbone", "Head", 90, 0.6f, 4},
-        {"Neck", "Spine", 400, 0.2f, 2},           {"Upper spine", "Spine", 300, 0.3f, 4},
-        {"Lower spine", "Spine", 300, 0.3f, 4},    {"Tailbone", "Spine", 120, 0.6f, 5},
-        {"Pelvis", "Torso", 250, 0.35f, 5},        {"Left rib", "Torso", 70, 0.65f, 6},
-        {"Right rib", "Torso", 70, 0.65f, 6},      {"Sternum", "Torso", 130, 0.45f, 3},
-        {"Left collarbone", "Arm", 110, 0.6f, 5},  {"Right collarbone", "Arm", 110, 0.6f, 5},
-        {"Left humerus", "Arm", 160, 0.45f, 5},    {"Right humerus", "Arm", 160, 0.45f, 5},
-        {"Left elbow", "Arm", 100, 0.55f, 5},      {"Right elbow", "Arm", 100, 0.55f, 5},
-        {"Left forearm", "Arm", 130, 0.55f, 6},    {"Right forearm", "Arm", 130, 0.55f, 6},
-        {"Left wrist", "Arm", 100, 0.7f, 7},       {"Right wrist", "Arm", 100, 0.7f, 7},
-        {"Left femur", "Leg", 280, 0.25f, 4},      {"Right femur", "Leg", 280, 0.25f, 4},
-        {"Left knee", "Leg", 140, 0.5f, 5},        {"Right knee", "Leg", 140, 0.5f, 5},
-        {"Left tibia", "Leg", 160, 0.45f, 5},      {"Right tibia", "Leg", 160, 0.45f, 5},
-        {"Left ankle", "Leg", 100, 0.65f, 6},      {"Right ankle", "Leg", 100, 0.65f, 6},
+        {"Skull", "Head", 250, 0.35f, 5},          {"Neck", "Spine", 400, 0.2f, 2},
+        {"Rib Cage", "Torso", 300, 0.55f, 7},      {"Lower Spine", "Spine", 300, 0.3f, 4},
+        {"Hips", "Torso", 250, 0.35f, 5},          {"Left Bicep", "Arm", 160, 0.45f, 5},
+        {"Right Bicep", "Arm", 160, 0.45f, 5},     {"Left Forearm", "Arm", 130, 0.55f, 6},
+        {"Right Forearm", "Arm", 130, 0.55f, 6},   {"Left Hand", "Arm", 100, 0.7f, 7},
+        {"Right Hand", "Arm", 100, 0.7f, 7},       {"Left Thigh", "Leg", 280, 0.25f, 4},
+        {"Right Thigh", "Leg", 280, 0.25f, 4},     {"Left Calf", "Leg", 160, 0.45f, 5},
+        {"Right Calf", "Leg", 160, 0.45f, 5},      {"Left Ankle", "Leg", 100, 0.65f, 6},
+        {"Right Ankle", "Leg", 100, 0.65f, 6},     {"Left Toes", "Leg", 60, 0.75f, 6},
+        {"Right Toes", "Leg", 60, 0.75f, 6},
     };
     return list;
 }
@@ -56,6 +52,34 @@ void Tracker::reset() {
     slow_since_ = air_start_ = -1;
 }
 
+// With the skeleton: a bone breaks when its own middle loses speed suddenly (it hit something),
+// harder for the sturdy ones. This is what puts the break where the body actually struck.
+void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, double dt) {
+    const auto &list = bones();
+    std::array<std::array<float, 3>, 19> velocity{};
+    for (std::size_t i = 0; i < 19; ++i)
+        for (std::size_t k = 0; k < 3; ++k)
+            velocity[i][k] = static_cast<float>((now.bone_centres[i][k] - previous.bone_centres[i][k]) / dt);
+    if (have_bone_velocity_) {
+        for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
+            if (is_broken_[i]) continue;
+            float change = 0;
+            for (std::size_t k = 0; k < 3; ++k) change += (velocity[i][k] - bone_velocity_[i][k]) * (velocity[i][k] - bone_velocity_[i][k]);
+            change = std::sqrt(change);
+            // Teleports and respawns move the whole body at once: not a hit.
+            if (change > 60.0f) continue;
+            const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
+            if (change >= needed) {
+                is_broken_[i] = true;
+                live_.broken.push_back({i, change, now.time});
+                live_.biggest_hit = std::max(live_.biggest_hit, change);
+            }
+        }
+    }
+    bone_velocity_ = velocity;
+    have_bone_velocity_ = true;
+}
+
 void Tracker::register_impact(float drop) {
     ++live_.impacts;
     live_.biggest_hit = std::max(live_.biggest_hit, drop);
@@ -75,7 +99,7 @@ void Tracker::register_impact(float drop) {
         const float chance = std::clamp((drop - 3.0f) / 14.0f, 0.08f, 0.97f) * (0.35f + list[index].fragility);
         if (unit(rng_) < chance) {
             is_broken_[index] = true;
-            live_.broken.push_back({index, drop});
+            live_.broken.push_back({index, drop, previous_.time});
         }
     }
 }
@@ -105,6 +129,7 @@ bool Tracker::update(const Sample &s) {
             live_.serial = ++serial_;
             rng_ = 0xC0FFEEull * live_.serial + 17;
             is_broken_.assign(bones().size(), false);
+            have_bone_velocity_ = false;
             start_ = s;
             slow_since_ = -1;
             air_start_ = -1;
@@ -114,7 +139,13 @@ bool Tracker::update(const Sample &s) {
         const double dt = s.time - previous_.time;
         if (dt > 0 && dt < 0.25) {
             const float drop = previous_.speed - s.speed;
-            if (drop >= config_.impact_threshold) register_impact(drop);
+            if (s.bones_valid && previous_.bones_valid) {
+                if (drop >= config_.impact_threshold) ++live_.impacts;
+                break_bones_from_rig(previous_, s, dt);
+            } else {
+                have_bone_velocity_ = false;
+                if (drop >= config_.impact_threshold) register_impact(drop);
+            }
             if (s.airborne) {
                 if (air_start_ < 0) air_start_ = previous_.time;
             } else if (air_start_ >= 0) {

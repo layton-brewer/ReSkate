@@ -12,6 +12,7 @@ void register_hall_of_meat_commands(Commands &registry) {
         {"stop", "Stop the Hall Of Meat challenge", nullptr},
         {"list", "List the Hall Of Meat challenges", nullptr},
         {"status", "How the Hall Of Meat challenge is going", nullptr},
+        {"rig", "Log the skater skeleton (diagnostic)", nullptr},
     };
     for (const auto &verb : verbs) {
         std::vector<Argument> arguments;

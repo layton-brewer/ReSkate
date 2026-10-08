@@ -27,6 +27,7 @@
 #include "Extension/Throwdowns/native_throwdowns.h"
 #include "Extension/Trainer/trainer.h"
 #include "Extension/HallOfMeat/hall_of_meat_hud.h"
+#include "Extension/HallOfMeat/hom_rig.h"
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
 #include <dxgi.h>
@@ -1030,6 +1031,7 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
         }
         {
             DINGO_PROFILE_ZONE("tick/Hall Of Meat");
+            dingosdk::hall_of_meat::rig_tick(r.base, client);
             dingosdk::overlay::hall_of_meat_tick();
         }
         {
