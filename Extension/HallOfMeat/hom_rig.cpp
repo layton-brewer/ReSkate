@@ -2,6 +2,8 @@
 #include "Engine/Core/Log/logging.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
 #include "Extension/Skater/client_source_spawn_internal.h"
+#include "Engine/Game/Build/20260929/client_source_spawn.h"
+#include <Windows.h>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -162,9 +164,43 @@ void publish_view(std::uintptr_t base, std::uintptr_t client) {
         {P(344), along(P(343), P(344), 0.07f), 0.025f}, {P(11), along(P(10), P(11), 0.07f), 0.025f},
     }};
     view.valid = true;
+    // Upright: the head at least half a metre above the hips (standing or walking off).
+    rig_upright().store(P(103)[1] - P(7)[1] > 0.5f);
     view.base = base;
     view.at = std::chrono::steady_clock::now();
     publish_rig(view);
+}
+
+// The game's UI draw flag (what ReSkate's own `hideui` toggles): cleared while a bail is on
+// screen, put back afterwards unless someone else changed it meanwhile.
+struct UiHide {
+    bool applied{};
+    std::uintptr_t object{};
+};
+bool write_byte(std::uintptr_t address, std::uint8_t value) noexcept {
+    __try {
+        *reinterpret_cast<volatile std::uint8_t *>(address) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+void apply_ui_hide(std::uintptr_t base) noexcept {
+    static UiHide hide;
+    const bool want = hide_game_ui().load();
+    namespace spawn = addr::client_source_spawn;
+    std::uintptr_t object{}, vtable{}, type{};
+    if (!first_person_read(base + spawn::ui_settings, &object, 8) || !object || !first_person_read(object, &vtable, 8) ||
+        vtable != base + spawn::ui_settings_vtable || !first_person_read(object + 8, &type, 8) || type != base + spawn::ui_settings_type)
+        return;
+    std::uint8_t draw{};
+    if (!first_person_read(object + 0x4e, &draw, 1) || draw > 1) return;
+    if (want && !hide.applied && draw == 1) {
+        if (write_byte(object + 0x4e, 0)) hide = {true, object};
+    } else if (!want && hide.applied) {
+        if (hide.object == object && draw == 0) (void)write_byte(object + 0x4e, 1);
+        hide = {};
+    }
 }
 } // namespace
 
@@ -173,6 +209,7 @@ void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
         publish_view(base, client);
     } catch (...) {
     }
+    apply_ui_hide(base);
     if (!rig_probe_requested().exchange(false)) return;
     try {
         probe(base, client);

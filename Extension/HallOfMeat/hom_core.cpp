@@ -63,12 +63,13 @@ void Tracker::break_bones_from_rig(const Sample &previous, const Sample &now, do
     if (have_bone_velocity_) {
         for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
             if (is_broken_[i]) continue;
-            float change = 0;
-            for (std::size_t k = 0; k < 3; ++k) change += (velocity[i][k] - bone_velocity_[i][k]) * (velocity[i][k] - bone_velocity_[i][k]);
-            change = std::sqrt(change);
+            // Speed the bone's middle lost this tick: a hit stops it, a swing only turns it.
+            const auto length = [](const std::array<float, 3> &v) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); };
+            const float change = length(bone_velocity_[i]) - length(velocity[i]);
             // Teleports and respawns move the whole body at once: not a hit.
             if (change > 60.0f) continue;
             const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
+            if (now.time - start_.time < 0.15) continue; // the wipeout's own first jolt
             if (change >= needed) {
                 is_broken_[i] = true;
                 live_.broken.push_back({i, change, now.time});
@@ -170,7 +171,10 @@ bool Tracker::update(const Sample &s) {
             slow_since_ = -1;
         }
         const bool settled = slow_since_ >= 0 && s.time - slow_since_ >= config_.settle_time;
-        const bool recovered = s.physics_state != config_.wipeout_state && live_.duration > 0.5f && s.speed < 2.0f;
+        // With the skeleton: over once the skater is back on their feet. Without it: out of the
+        // wipeout state and slow.
+        const bool recovered = s.bones_valid ? (s.upright && live_.duration > 0.6f)
+                                             : (s.physics_state != config_.wipeout_state && live_.duration > 0.5f && s.speed < 2.0f);
         if (settled || recovered || live_.duration > config_.max_duration) {
             if (air_start_ >= 0) live_.air_time += static_cast<float>(s.time - air_start_);
             if (live_.duration >= config_.min_duration) {

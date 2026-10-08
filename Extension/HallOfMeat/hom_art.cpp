@@ -22,6 +22,7 @@ struct Loaded {
     std::map<std::string, Picture, std::less<>> pictures;
     ImFontAtlas *atlas{};
     bool filled{};
+    std::map<int, ImFont *> fonts;
 };
 Loaded &loaded() {
     static Loaded value;
@@ -49,12 +50,12 @@ bool decode(const fs::path &path, Picture &picture) {
     return SUCCEEDED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(picture.rgba.size()), picture.rgba.data()));
 }
 
-fs::path art_directory() {
+fs::path hom_directory() {
     std::wstring path(32768, L'\0');
     const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (!length || length >= path.size()) return {};
     path.resize(length);
-    return fs::path(path).parent_path() / L"HallOfMeat" / L"art";
+    return fs::path(path).parent_path() / L"HallOfMeat";
 }
 } // namespace
 
@@ -62,7 +63,21 @@ std::size_t reserve_hom_art(ImFontAtlas &atlas) noexcept {
     try {
         auto &l = loaded();
         l = {};
-        const auto directory = art_directory();
+        const auto root = hom_directory();
+        if (root.empty()) return 0;
+        const auto font_path = root / L"fonts" / L"FuturaStd-Heavy.ttf";
+        std::error_code font_error;
+        if (fs::is_regular_file(font_path, font_error)) {
+            static const ImWchar ranges[]{0x0020, 0x00FF, 0};
+            for (const int size : {22, 28, 60}) {
+                ImFontConfig config;
+                config.OversampleH = 2;
+                config.PixelSnapH = false;
+                if (auto *font = atlas.AddFontFromFileTTF(font_path.string().c_str(), static_cast<float>(size), &config, ranges))
+                    l.fonts[size] = font;
+            }
+        }
+        const auto directory = root / L"art";
         std::error_code error;
         if (directory.empty() || !fs::is_directory(directory, error)) return 0;
         const auto hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -109,6 +124,12 @@ void fill_hom_art(ImFontAtlas &atlas) noexcept {
     } catch (...) {
         l = {};
     }
+}
+
+ImFont *hom_font(int size) noexcept {
+    const auto &l = loaded();
+    const auto it = l.fonts.find(size);
+    return it == l.fonts.end() ? nullptr : it->second;
 }
 
 bool hom_art(std::string_view name, HomArt &art) noexcept {

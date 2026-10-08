@@ -21,6 +21,7 @@ struct Sample {
     float heading{}; // degrees, 0..360
     // Middle of each X-ray bone in world space (hom_rig.h order), when the skeleton could be read.
     bool bones_valid{};
+    bool upright{}; // head well above the hips
     std::array<std::array<float, 3>, 19> bone_centres{};
 };
 
@@ -60,7 +61,7 @@ struct Result {
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
-    float bone_break_speed = 9.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
+    float bone_break_speed = 16.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float settle_speed = 0.6f;         // below this for settle_time ends the bail
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring

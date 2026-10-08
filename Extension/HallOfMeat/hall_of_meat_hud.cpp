@@ -143,7 +143,9 @@ struct Row {
 
 void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade, float scale, double now, double started) {
     const auto display = ImGui::GetIO().DisplaySize;
-    auto *font = ImGui::GetFont();
+    auto *font = hom_font(28) ? hom_font(28) : ImGui::GetFont();
+    auto *score_font = hom_font(60) ? hom_font(60) : font;
+    auto *small_font = hom_font(22) ? hom_font(22) : font;
     const float left = display.x * 0.083f, right = display.x * 0.23f, bottom = display.y * 0.925f;
     const float width = right - left;
     const float intro = std::clamp(static_cast<float>((now - started) / 0.25), 0.0f, 1.0f);
@@ -152,20 +154,20 @@ void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade
     const float cx = left + width * 0.5f + slide;
 
     // Score and mark.
-    const float score_size = 54.0f * scale;
+    const float score_size = 60.0f * scale;
     const auto score = with_commas(static_cast<int>(total_shown));
-    const auto extent = font->CalcTextSizeA(score_size, FLT_MAX, 0.0f, score.c_str());
-    const float score_y = bottom - score_size - 6.0f * scale;
-    shadowed(draw, font, score_size, ImVec2(cx - extent.x * 0.5f, score_y), alpha(white, a), score);
+    const auto extent = score_font->CalcTextSizeA(score_size, FLT_MAX, 0.0f, score.c_str());
+    const float score_y = bottom - score_size - 2.0f * scale;
+    shadowed(draw, score_font, score_size, ImVec2(cx - extent.x * 0.5f, score_y), alpha(white, a), score);
     draw->AddRectFilled(ImVec2(left + slide, bottom), ImVec2(right + slide, bottom + 2.0f * scale), alpha(IM_COL32(170, 220, 235, 190), a));
 
-    const float hom_size = 21.0f * scale;
+    const float hom_size = 22.0f * scale;
     const auto hom = std::string("Hall of Meat");
-    const auto hom_extent = font->CalcTextSizeA(hom_size, FLT_MAX, 0.0f, hom.c_str());
+    const auto hom_extent = small_font->CalcTextSizeA(hom_size, FLT_MAX, 0.0f, hom.c_str());
     const float hom_y = score_y - hom_size - 2.0f * scale;
-    shadowed(draw, font, hom_size, ImVec2(cx - hom_extent.x * 0.5f, hom_y), alpha(IM_COL32(236, 236, 236, 255), a), hom);
+    shadowed(draw, small_font, hom_size, ImVec2(cx - hom_extent.x * 0.5f, hom_y), alpha(IM_COL32(236, 236, 236, 255), a), hom);
 
-    const float logo_h = 46.0f * scale;
+    const float logo_h = 62.0f * scale;
     const float logo_y = hom_y - logo_h + 2.0f * scale;
     if (has_art("thrasher")) {
         HomArt logo;
@@ -186,7 +188,7 @@ void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade
     if (r.drop >= 0.5f) rows.push_back({"arrow", 2, std::format("{:.1f} m", r.drop), with_commas(r.drop_points)});
     if (r.duration > 0.0f) rows.push_back({"timer", 3, std::format("{:05.2f}s", r.duration), with_commas(r.duration_points)});
 
-    const float row_h = 36.0f * scale, text_size = 24.0f * scale;
+    const float row_h = 36.0f * scale, text_size = 28.0f * scale;
     float y = logo_y - 12.0f * scale - row_h;
     for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
         const ImVec2 icon_centre(left + 22.0f * scale + slide, y + row_h * 0.5f);
@@ -305,8 +307,8 @@ void draw_bone(ImDrawList *draw, std::size_t index, ImVec2 a, ImVec2 b, float r,
         draw->AddPolyline(zig, 4, alpha(IM_COL32(20, 0, 0, 255), 0.9f * fade), 0, std::max(1.5f, r * 0.35f));
         if (since_break < 0.6f) {
             const float k = since_break / 0.6f;
-            draw->AddCircleFilled(m, s * (1.0f + 3.0f * k), alpha(hot, (1.0f - k) * 0.55f * fade), 24);
-            draw->AddCircle(m, s * (1.5f + 5.0f * k), alpha(IM_COL32_WHITE, (1.0f - k) * 0.8f * fade), 32, std::max(2.0f, r * 0.4f));
+            draw->AddCircleFilled(m, s * (0.8f + 1.2f * k), alpha(hot, (1.0f - k) * 0.6f * fade), 24);
+            draw->AddCircle(m, s * (1.0f + 1.8f * k), alpha(IM_COL32_WHITE, (1.0f - k) * 0.7f * fade), 32, std::max(1.5f, r * 0.3f));
         }
     }
 }
@@ -414,6 +416,7 @@ void hall_of_meat_tick() {
     in.heading = telemetry.heading;
     if (const auto rig = hall_of_meat::latest_rig(); rig.valid) {
         in.bones_valid = true;
+        in.upright = hall_of_meat::rig_upright().load();
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i)
             for (std::size_t k = 0; k < 3; ++k) in.bone_centres[i][k] = (rig.bones[i].a[k] + rig.bones[i].b[k]) * 0.5f;
     }
@@ -424,6 +427,7 @@ void hall_of_meat_tick() {
     s.last_state = in.physics_state;
     const bool was_bailing = s.tracker.phase() == Phase::bailing;
     const bool done = s.tracker.update(in);
+    hall_of_meat::hide_game_ui().store(s.tracker.phase() == Phase::bailing || now < s.visible_until);
     if (!was_bailing && s.tracker.phase() == Phase::bailing) {
         s.started = now;
         s.shown_total = 0;
@@ -544,7 +548,7 @@ void draw_hall_of_meat_hud() {
     s.shown_total += (target - s.shown_total) * std::min(1.0f, ImGui::GetIO().DeltaTime * 8.0f);
     if (std::abs(target - s.shown_total) < 1.0f) s.shown_total = target;
     draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
-    draw_xray(draw, r, now, live ? 1.0f : fade);
+    if (live) draw_xray(draw, r, now, 1.0f);
     draw_block(draw, r, s.shown_total, fade, scale, now, s.started);
 }
 } // namespace dingosdk::overlay

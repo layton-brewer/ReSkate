@@ -16,6 +16,9 @@ struct HomArt {
 std::size_t reserve_hom_art(ImFontAtlas &) noexcept;
 // After the atlas is built: copies the pixels in.
 void fill_hom_art(ImFontAtlas &) noexcept;
+// Skate 3's HUD typeface (Futura Std Heavy) at a pixel size it was baked for, or null when the
+// font files are not there. Sizes: 22, 28, 60.
+ImFont *hom_font(int size) noexcept;
 // The picture called `name` (file name without .png), or false when it is not there.
 bool hom_art(std::string_view name, HomArt &art) noexcept;
 } // namespace dingosdk::overlay

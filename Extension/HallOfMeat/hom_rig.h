@@ -35,6 +35,16 @@ inline RigView latest_rig(std::chrono::milliseconds max_age = std::chrono::milli
     if (!rig_detail::latest.valid || std::chrono::steady_clock::now() - rig_detail::latest.at > max_age) return {};
     return rig_detail::latest;
 }
+// Set by the HUD while a bail is on screen: the game's own interface is hidden meanwhile.
+inline std::atomic<bool> &hide_game_ui() {
+    static std::atomic<bool> value{};
+    return value;
+}
+// Whether the skater stands upright (head well above the hips), from the last skeleton read.
+inline std::atomic<bool> &rig_upright() {
+    static std::atomic<bool> value{};
+    return value;
+}
 inline std::atomic<bool> &rig_probe_requested() {
     static std::atomic<bool> value{};
     return value;
