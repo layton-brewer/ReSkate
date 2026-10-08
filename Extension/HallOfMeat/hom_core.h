@@ -1,0 +1,93 @@
+#pragma once
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// Hall Of Meat scoring core. Pure logic with no game or UI dependencies, so it can be unit tested:
+// feed it one Sample per client tick and it tracks a bail from the moment the skater wipes out
+// until they settle, detects impacts from sudden speed loss, breaks bones from those impacts and
+// scores the whole bail. Scoring follows the Skate series: bones broken, distance, air time, with
+// a multiplier for how much of the skeleton went.
+namespace dingosdk::hall_of_meat {
+
+struct Sample {
+    double time{}; // seconds, monotonic
+    std::array<float, 3> position{};
+    float speed{};    // metres per second over the ground
+    float vertical{}; // metres per second, upward positive
+    bool airborne{};
+    std::uint32_t physics_state{};
+};
+
+struct Bone {
+    const char *name;
+    const char *region;
+    int points;      // base score when broken
+    float fragility; // 0..1, how readily it breaks
+    float weight;    // how likely an impact is to land on it
+};
+const std::vector<Bone> &bones();
+
+struct BrokenBone {
+    std::size_t bone{};
+    float impact{}; // m/s of speed lost in the hit that broke it
+};
+
+struct Result {
+    std::uint32_t serial{};
+    std::vector<BrokenBone> broken;
+    int impacts{};
+    float distance{};    // metres from where the bail began
+    float peak_speed{};  // m/s
+    float peak_height{}; // metres above the start of the bail
+    float air_time{};    // seconds off the ground during the bail
+    float duration{};    // seconds
+    float biggest_hit{}; // m/s
+    int bone_points{}, distance_points{}, air_points{}, height_points{}, speed_points{}, multiplier_tenths{10};
+    int total{};
+    std::string title;
+};
+
+struct Config {
+    std::uint32_t wipeout_state = 300; // physics state that starts a bail
+    float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
+    float settle_speed = 0.6f;         // below this for settle_time ends the bail
+    float settle_time = 1.0f;
+    float min_duration = 0.4f; // shorter wipeouts are not worth scoring
+    float max_duration = 45.0f;
+    float distance_scale = 10.0f; // points per metre
+    float height_scale = 15.0f;
+    float air_scale = 20.0f;
+    float speed_scale = 2.0f; // points per km/h of peak speed
+};
+
+enum class Phase { idle, bailing, finished };
+
+class Tracker {
+public:
+    explicit Tracker(Config config = {}) : config_(config) {}
+    // Returns true on the tick a bail ends (result() is then valid).
+    bool update(const Sample &sample);
+    Phase phase() const { return phase_; }
+    const Result &live() const { return live_; }   // the bail in progress, scored so far
+    const Result &result() const { return last_; } // the last finished bail
+    void reset();
+    const Config &config() const { return config_; }
+
+private:
+    void score(Result &r) const;
+    void register_impact(float drop);
+    Config config_;
+    Phase phase_{Phase::idle};
+    Result live_{}, last_{};
+    Sample previous_{}, start_{};
+    bool have_previous_{};
+    double slow_since_{-1}, air_start_{-1};
+    std::uint32_t serial_{};
+    std::uint64_t rng_{};
+    std::vector<bool> is_broken_;
+};
+
+const char *title_for(int total, std::size_t bones_broken);
+} // namespace dingosdk::hall_of_meat
