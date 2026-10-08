@@ -4,6 +4,7 @@
 #include "overlay_internal.h"
 #include "Extension/Trainer/trainer_page.h"
 #include "Extension/HallOfMeat/hall_of_meat_hud.h"
+#include "Extension/HallOfMeat/hom_art.h"
 #include "park_previews.h"
 #include "chat_emotes.h"
 #include "input_capture.h"
@@ -288,8 +289,11 @@ bool setup_graphics() {
     // normally long finished by the time the first frame gets here.
     // Emotes reserve their room before the park previews build the atlas, and fill it after.
     const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
+    const auto hom_art_count = reserve_hom_art(*ImGui::GetIO().Fonts);
     const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
     fill_chat_emotes(*ImGui::GetIO().Fonts);
+    fill_hom_art(*ImGui::GetIO().Fonts);
+    (void)hom_art_count;
     if (emote_count)
         dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
             "Chat emotes: %zu ready.", emote_count);

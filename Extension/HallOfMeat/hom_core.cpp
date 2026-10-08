@@ -85,14 +85,13 @@ void Tracker::score(Result &r) const {
     int base = 0;
     for (const auto &b : r.broken) base += list[b.bone].points;
     r.bone_points = base;
-    r.distance_points = static_cast<int>(r.distance * config_.distance_scale);
-    r.height_points = static_cast<int>(r.peak_height * config_.height_scale);
-    r.air_points = static_cast<int>(r.air_time * config_.air_scale);
+    const auto cap = [&](float value) { return std::min(config_.metric_cap, static_cast<int>(std::max(0.0f, value))); };
+    r.air_points = cap(r.air_time * config_.air_scale);
+    r.drop_points = cap(r.drop * config_.drop_scale);
+    r.duration_points = static_cast<int>(std::max(0.0f, r.duration - config_.duration_start) * config_.duration_scale);
     r.speed_points = static_cast<int>(r.peak_speed * 3.6f * config_.speed_scale);
-    // Every bone past the first adds a tenth, so a shattered skeleton is worth far more than the sum.
-    r.multiplier_tenths = 10 + std::max<int>(0, static_cast<int>(r.broken.size()) - 1);
-    const int raw = r.bone_points + r.distance_points + r.height_points + r.air_points + r.speed_points;
-    r.total = raw * r.multiplier_tenths / 10;
+    r.rotation_points = static_cast<int>(r.rotation * config_.rotation_scale);
+    r.total = r.bone_points + r.air_points + r.drop_points + r.duration_points + r.speed_points + r.rotation_points;
     r.title = title_for(r.total, r.broken.size());
 }
 
@@ -126,6 +125,13 @@ bool Tracker::update(const Sample &s) {
         live_.distance = dist(s.position, start_.position);
         live_.peak_speed = std::max(live_.peak_speed, s.speed);
         live_.peak_height = std::max(live_.peak_height, s.position[1] - start_.position[1]);
+        live_.drop = std::max(live_.drop, start_.position[1] - s.position[1]);
+        {
+            float turn = s.heading - previous_.heading;
+            while (turn > 180.0f) turn -= 360.0f;
+            while (turn < -180.0f) turn += 360.0f;
+            if (dt > 0 && dt < 0.25) live_.rotation += std::abs(turn);
+        }
         live_.duration = static_cast<float>(s.time - start_.time);
         if (s.speed < config_.settle_speed) {
             if (slow_since_ < 0) slow_since_ = s.time;

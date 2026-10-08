@@ -18,6 +18,7 @@ struct Sample {
     float vertical{}; // metres per second, upward positive
     bool airborne{};
     std::uint32_t physics_state{};
+    float heading{}; // degrees, 0..360
 };
 
 struct Bone {
@@ -44,7 +45,10 @@ struct Result {
     float air_time{};    // seconds off the ground during the bail
     float duration{};    // seconds
     float biggest_hit{}; // m/s
-    int bone_points{}, distance_points{}, air_points{}, height_points{}, speed_points{}, multiplier_tenths{10};
+    float drop{};     // metres below where the bail began, at its lowest
+    float rotation{}; // degrees turned about the vertical during the bail
+    // Points per row of the original HUD: the bone chip on top, then the metrics.
+    int bone_points{}, rotation_points{}, air_points{}, drop_points{}, duration_points{}, speed_points{};
     int total{};
     std::string title;
 };
@@ -56,10 +60,15 @@ struct Config {
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
     float max_duration = 45.0f;
-    float distance_scale = 10.0f; // points per metre
-    float height_scale = 15.0f;
-    float air_scale = 20.0f;
-    float speed_scale = 2.0f; // points per km/h of peak speed
+    // Calibrated against the original's HUD (video): air 6.4 s and drops past ~52 m both read 10,000;
+    // a 7.10 s bail read 7,750 and 8.26 s read 11,333; 36 km/h read 785.
+    float air_scale = 1850.0f; // points per second of air, capped at metric_cap
+    float drop_scale = 190.0f; // points per metre dropped, capped
+    float duration_scale = 3089.0f;
+    float duration_start = 4.59f; // seconds before a bail starts paying
+    float speed_scale = 21.8f;    // points per km/h of peak speed
+    float rotation_scale = 5.0f;  // points per degree turned
+    int metric_cap = 10000;
 };
 
 enum class Phase { idle, bailing, finished };

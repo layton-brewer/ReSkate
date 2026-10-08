@@ -1,30 +1,37 @@
 #include "hall_of_meat_hud.h"
+#include "hom_art.h"
 #include "hom_core.h"
 #include "Engine/Core/Log/logging.h"
 #include "Extension/Trainer/trainer.h"
-#include "Extension/UI/skate_theme.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <format>
-#include <chrono>
 #include <imgui.h>
 #include <mutex>
 #include <string>
+#include <vector>
 
+// Hall Of Meat HUD, laid out from the original (Skate 3): bottom left, a bone chip and a stack of
+// metric rows (rotation, air time, drop, bail time) over the Thrasher "Hall of Meat" mark and the
+// score; a dark, tinted vignette while the skater is a ragdoll.
 namespace dingosdk::overlay {
 namespace {
-namespace theme = dingosdk::skate_theme;
 using namespace dingosdk::hall_of_meat;
+using Clock = std::chrono::steady_clock;
 
-constexpr double result_seconds = 9.0;
+constexpr double linger_seconds = 4.0, fade_seconds = 0.8;
+constexpr ImU32 cyan = IM_COL32(150, 232, 240, 255);
+constexpr ImU32 white = IM_COL32(246, 246, 246, 255);
+constexpr ImU32 chip_blue = IM_COL32(32, 168, 214, 235);
 
 struct State {
     std::mutex mutex; // the game thread feeds the tracker, the presentation thread draws it
     Tracker tracker;
-    double result_until{}; // steady-clock seconds
+    double visible_until{};
+    double started{};
+    float shown_total{};
     int best{};
-    int session_total{};
-    int bails{};
     std::uint32_t last_state{};
     double last_time{-1};
 };
@@ -33,14 +40,133 @@ State &state() {
     return value;
 }
 
+double clock_seconds() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
+
 std::string with_commas(int value) {
     auto text = std::to_string(value);
     for (int i = static_cast<int>(text.size()) - 3; i > 0; i -= 3) text.insert(static_cast<std::size_t>(i), ",");
     return text;
 }
+ImU32 alpha(ImU32 colour, float a) {
+    const auto base = static_cast<float>((colour >> IM_COL32_A_SHIFT) & 0xff);
+    return (colour & ~IM_COL32_A_MASK) | (static_cast<ImU32>(std::clamp(base * a, 0.0f, 255.0f)) << IM_COL32_A_SHIFT);
+}
+void shadowed(ImDrawList *draw, ImFont *font, float size, ImVec2 at, ImU32 colour, const std::string &text) {
+    const float offset = std::max(1.0f, size / 14.0f);
+    const auto a = static_cast<float>((colour >> IM_COL32_A_SHIFT) & 0xff) / 255.0f;
+    draw->AddText(font, size, ImVec2(at.x + offset, at.y + offset), alpha(IM_COL32(0, 0, 0, 255), a * 0.85f), text.c_str());
+    draw->AddText(font, size, at, colour, text.c_str());
+}
+void image(ImDrawList *draw, std::string_view name, ImVec2 a, ImVec2 b, ImU32 tint = IM_COL32_WHITE) {
+    HomArt art;
+    if (hom_art(name, art)) draw->AddImage(art.texture, a, b, art.uv0, art.uv1, tint);
+}
+bool has_art(std::string_view name) {
+    HomArt art;
+    return hom_art(name, art);
+}
 
-double clock_seconds() {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+// The dark, bluish fisheye the original draws over the world while the skater is a ragdoll.
+void draw_vignette(ImDrawList *draw, ImVec2 size, float strength) {
+    if (strength <= 0.0f) return;
+    const ImU32 edge = IM_COL32(8, 10, 28, static_cast<int>(210 * strength)), none = IM_COL32(8, 10, 28, 0);
+    const float band_x = size.x * 0.22f, band_y = size.y * 0.30f;
+    draw->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(band_x, size.y), edge, none, none, edge);
+    draw->AddRectFilledMultiColor(ImVec2(size.x - band_x, 0), ImVec2(size.x, size.y), none, edge, edge, none);
+    draw->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(size.x, band_y), edge, edge, none, none);
+    draw->AddRectFilledMultiColor(ImVec2(0, size.y - band_y), ImVec2(size.x, size.y), none, none, edge, edge);
+}
+
+// Small icons for rows the original art does not give us a texture for.
+void icon_rotation(ImDrawList *draw, ImVec2 c, float r, ImU32 colour) {
+    draw->PathArcTo(c, r * 0.75f, -0.3f, 4.6f, 24);
+    draw->PathStroke(colour, 0, r * 0.28f);
+    draw->AddTriangleFilled(ImVec2(c.x + r * 0.95f, c.y - r * 0.5f), ImVec2(c.x + r * 0.35f, c.y - r * 0.55f),
+                            ImVec2(c.x + r * 0.7f, c.y + r * 0.05f), colour);
+}
+void icon_air(ImDrawList *draw, ImVec2 c, float r, ImU32 colour) {
+    draw->AddTriangleFilled(ImVec2(c.x, c.y - r), ImVec2(c.x - r * 0.9f, c.y + r * 0.6f), ImVec2(c.x + r * 0.9f, c.y + r * 0.6f), colour);
+    draw->AddTriangleFilled(ImVec2(c.x, c.y + r * 0.25f), ImVec2(c.x - r * 0.35f, c.y + r), ImVec2(c.x + r * 0.35f, c.y + r), alpha(colour, 0.7f));
+}
+
+struct Row {
+    std::string_view icon;
+    int kind;  // 0 rotation, 1 air, 2 drop, 3 duration
+    std::string value, points;
+};
+
+void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade, float scale, double now, double started) {
+    const auto display = ImGui::GetIO().DisplaySize;
+    auto *font = ImGui::GetFont();
+    const float left = display.x * 0.083f, right = display.x * 0.23f, bottom = display.y * 0.925f;
+    const float width = right - left;
+    const float intro = std::clamp(static_cast<float>((now - started) / 0.25), 0.0f, 1.0f);
+    const float a = fade * intro;
+    const float slide = (1.0f - intro) * -24.0f * scale;
+    const float cx = left + width * 0.5f + slide;
+
+    // Score and mark.
+    const float score_size = 54.0f * scale;
+    const auto score = with_commas(static_cast<int>(total_shown));
+    const auto extent = font->CalcTextSizeA(score_size, FLT_MAX, 0.0f, score.c_str());
+    const float score_y = bottom - score_size - 6.0f * scale;
+    shadowed(draw, font, score_size, ImVec2(cx - extent.x * 0.5f, score_y), alpha(white, a), score);
+    draw->AddRectFilled(ImVec2(left + slide, bottom), ImVec2(right + slide, bottom + 2.0f * scale), alpha(IM_COL32(170, 220, 235, 190), a));
+
+    const float hom_size = 21.0f * scale;
+    const auto hom = std::string("Hall of Meat");
+    const auto hom_extent = font->CalcTextSizeA(hom_size, FLT_MAX, 0.0f, hom.c_str());
+    const float hom_y = score_y - hom_size - 2.0f * scale;
+    shadowed(draw, font, hom_size, ImVec2(cx - hom_extent.x * 0.5f, hom_y), alpha(IM_COL32(236, 236, 236, 255), a), hom);
+
+    const float logo_h = 46.0f * scale;
+    const float logo_y = hom_y - logo_h + 2.0f * scale;
+    if (has_art("thrasher")) {
+        HomArt logo;
+        hom_art("thrasher", logo);
+        const float logo_w = logo_h * logo.width / std::max(1.0f, logo.height);
+        image(draw, "thrasher", ImVec2(cx - logo_w * 0.5f, logo_y), ImVec2(cx + logo_w * 0.5f, logo_y + logo_h), alpha(cyan, a));
+    } else {
+        const auto name = std::string("THRASHER");
+        const float s = logo_h * 0.95f;
+        const auto e = font->CalcTextSizeA(s, FLT_MAX, 0.0f, name.c_str());
+        shadowed(draw, font, s, ImVec2(cx - e.x * 0.5f, logo_y), alpha(cyan, a), name);
+    }
+
+    // Metric rows, newest at the bottom like the original: rotation, air, drop, bail time.
+    std::vector<Row> rows;
+    if (r.rotation >= 1.0f) rows.push_back({"", 0, std::format("{:.0f}\xC2\xB0", r.rotation), r.rotation_points > 0 ? with_commas(r.rotation_points) : ""});
+    if (r.air_time > 0.0f) rows.push_back({"", 1, std::format("{:05.2f}s", r.air_time), with_commas(r.air_points)});
+    if (r.drop >= 0.5f) rows.push_back({"arrow", 2, std::format("{:.1f} m", r.drop), with_commas(r.drop_points)});
+    if (r.duration > 0.0f) rows.push_back({"timer", 3, std::format("{:05.2f}s", r.duration), with_commas(r.duration_points)});
+
+    const float row_h = 36.0f * scale, text_size = 24.0f * scale;
+    float y = logo_y - 12.0f * scale - row_h;
+    for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+        const ImVec2 icon_centre(left + 22.0f * scale + slide, y + row_h * 0.5f);
+        const float ir = 12.0f * scale;
+        const ImU32 icon_colour = alpha(cyan, a);
+        if (it->kind == 0) icon_rotation(draw, icon_centre, ir, icon_colour);
+        else if (it->kind == 1) icon_air(draw, icon_centre, ir, icon_colour);
+        else if (has_art(it->icon)) image(draw, it->icon, ImVec2(icon_centre.x - ir, icon_centre.y - ir), ImVec2(icon_centre.x + ir, icon_centre.y + ir), icon_colour);
+        const float text_y = y + (row_h - text_size) * 0.5f;
+        shadowed(draw, font, text_size, ImVec2(left + 50.0f * scale + slide, text_y), alpha(white, a), it->value);
+        if (!it->points.empty()) {
+            const auto e = font->CalcTextSizeA(text_size, FLT_MAX, 0.0f, it->points.c_str());
+            shadowed(draw, font, text_size, ImVec2(right - e.x + slide, text_y), alpha(white, a), it->points);
+        }
+        y -= row_h;
+    }
+
+    // The bone chip on top: icon, count, points.
+    if (!r.broken.empty()) {
+        const float chip_h = row_h * 0.9f;
+        const ImVec2 a0(left + slide, y + (row_h - chip_h) * 0.5f);
+        draw->AddRectFilled(a0, ImVec2(left + 112.0f * scale + slide, a0.y + chip_h), alpha(chip_blue, a), 3.0f * scale);
+        if (has_art("bones")) image(draw, "bones", ImVec2(a0.x + 4.0f * scale, a0.y + 3.0f * scale), ImVec2(a0.x + chip_h - 3.0f * scale, a0.y + chip_h - 3.0f * scale), alpha(IM_COL32_WHITE, a));
+        shadowed(draw, font, 22.0f * scale, ImVec2(a0.x + chip_h + 4.0f * scale, a0.y + 4.0f * scale), alpha(white, a), std::format("x{}", r.broken.size()));
+        shadowed(draw, font, text_size, ImVec2(left + 122.0f * scale + slide, a0.y + 2.0f * scale), alpha(white, a), with_commas(r.bone_points));
+    }
 }
 } // namespace
 
@@ -64,85 +190,33 @@ void hall_of_meat_tick() {
     in.vertical = telemetry.vertical;
     in.airborne = telemetry.airborne;
     in.physics_state = telemetry.physics_state;
-    // Calibration log: the physics states a bail passes through, so the thresholds can be tuned.
+    in.heading = telemetry.heading;
+    // Calibration log: the physics states a bail passes through.
     if (s.tracker.phase() == Phase::bailing && in.physics_state != s.last_state)
         logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: physics state {} -> {} at {:.1f} km/h.",
                      s.last_state, in.physics_state, in.speed * 3.6f);
     s.last_state = in.physics_state;
-    if (s.tracker.update(in)) {
+    const bool was_bailing = s.tracker.phase() == Phase::bailing;
+    const bool done = s.tracker.update(in);
+    if (!was_bailing && s.tracker.phase() == Phase::bailing) {
+        s.started = now;
+        s.shown_total = 0;
+    }
+    if (done) {
         const auto &r = s.tracker.result();
-        s.result_until = now + result_seconds;
+        s.visible_until = now + linger_seconds + fade_seconds;
         s.best = std::max(s.best, r.total);
-        s.session_total += r.total;
-        ++s.bails;
         logging::log(logging::Level::info, logging::Channel::assets,
-                     "Hall Of Meat: bail {} scored {} ({} bones, {} impacts, {:.1f} m, {:.1f} s, biggest hit {:.1f} m/s) - {}.", r.serial,
-                     r.total, r.broken.size(), r.impacts, r.distance, r.duration, r.biggest_hit, r.title);
+                     "Hall Of Meat: bail {} scored {} (bones {} {}, air {:.2f}s {}, drop {:.1f}m {}, time {:.2f}s {}, speed {:.1f}m/s {}, rot {:.0f} {}) - {}.",
+                     r.serial, r.total, r.broken.size(), r.bone_points, r.air_time, r.air_points, r.drop, r.drop_points, r.duration,
+                     r.duration_points, r.peak_speed, r.speed_points, r.rotation, r.rotation_points, r.title);
     }
 }
-
-namespace {
-void plate(ImDrawList *draw, ImVec2 a, ImVec2 b, float scale, ImU32 accent) {
-    draw->AddRectFilled(a, b, theme::tile, 6.0f * scale);
-    draw->AddRectFilled(a, ImVec2(a.x + 5.0f * scale, b.y), accent, 3.0f * scale);
-}
-void centered(ImDrawList *draw, ImFont *font, float size, float cx, float y, ImU32 colour, const std::string &text) {
-    const auto extent = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
-    draw->AddText(font, size, ImVec2(cx - extent.x * 0.5f, y), colour, text.c_str());
-}
-
-void draw_live(ImDrawList *draw, const Result &r, float scale) {
-    const auto display = ImGui::GetIO().DisplaySize;
-    auto *font = ImGui::GetFont();
-    const float width = 420.0f * scale, height = 118.0f * scale;
-    const ImVec2 a((display.x - width) * 0.5f, 28.0f * scale);
-    plate(draw, a, ImVec2(a.x + width, a.y + height), scale, theme::danger);
-    const float cx = a.x + width * 0.5f;
-    centered(draw, font, 20.0f * scale, cx, a.y + 8.0f * scale, theme::danger, "HALL OF MEAT");
-    centered(draw, font, 44.0f * scale, cx, a.y + 30.0f * scale, theme::white, with_commas(r.total));
-    centered(draw, font, 18.0f * scale, cx, a.y + 84.0f * scale, theme::grey_text,
-             std::format("{} bones   {:.1f} m   {:.1f} s", r.broken.size(), r.distance, r.air_time));
-}
-
-void draw_result(ImDrawList *draw, const Result &r, int best, float scale) {
-    const auto display = ImGui::GetIO().DisplaySize;
-    auto *font = ImGui::GetFont();
-    const auto &list = bones();
-    const float width = 520.0f * scale;
-    const float row = 22.0f * scale;
-    const std::size_t shown = std::min<std::size_t>(r.broken.size(), 8);
-    const float height = 190.0f * scale + row * static_cast<float>(shown) + (r.broken.size() > shown ? row : 0.0f);
-    const ImVec2 a(display.x * 0.5f - width * 0.5f, display.y * 0.18f);
-    draw->PushClipRectFullScreen();
-    plate(draw, a, ImVec2(a.x + width, a.y + height), scale, theme::danger);
-    const float cx = a.x + width * 0.5f;
-    centered(draw, font, 22.0f * scale, cx, a.y + 10.0f * scale, theme::danger, r.title);
-    centered(draw, font, 48.0f * scale, cx, a.y + 36.0f * scale, theme::white, with_commas(r.total));
-    if (r.total >= best && r.total > 0) centered(draw, font, 18.0f * scale, cx, a.y + 92.0f * scale, theme::bar, "SESSION BEST");
-    else centered(draw, font, 18.0f * scale, cx, a.y + 92.0f * scale, theme::grey_text, std::format("best {}", with_commas(best)));
-    centered(draw, font, 16.0f * scale, cx, a.y + 116.0f * scale, theme::grey_text,
-             std::format("bones {}   distance {}   air {}   height {}   speed {}   x{:.1f}", r.bone_points, r.distance_points, r.air_points,
-                         r.height_points, r.speed_points, static_cast<float>(r.multiplier_tenths) / 10.0f));
-    float y = a.y + 146.0f * scale;
-    for (std::size_t i = 0; i < shown; ++i) {
-        const auto &b = list[r.broken[i].bone];
-        draw->AddText(font, 17.0f * scale, ImVec2(a.x + 22.0f * scale, y), theme::white, std::format("{}  ({})", b.name, b.region).c_str());
-        const auto points = std::format("+{}", b.points);
-        const auto extent = font->CalcTextSizeA(17.0f * scale, FLT_MAX, 0.0f, points.c_str());
-        draw->AddText(font, 17.0f * scale, ImVec2(a.x + width - 22.0f * scale - extent.x, y), theme::bar, points.c_str());
-        y += row;
-    }
-    if (r.broken.size() > shown)
-        draw->AddText(font, 16.0f * scale, ImVec2(a.x + 22.0f * scale, y), theme::grey_text,
-                      std::format("and {} more", r.broken.size() - shown).c_str());
-    draw->PopClipRect();
-}
-} // namespace
 
 bool hall_of_meat_hud_pending() {
     auto &s = state();
     std::lock_guard lock(s.mutex);
-    return s.tracker.phase() == Phase::bailing || clock_seconds() < s.result_until;
+    return s.tracker.phase() == Phase::bailing || clock_seconds() < s.visible_until;
 }
 
 void draw_hall_of_meat_hud() {
@@ -150,9 +224,19 @@ void draw_hall_of_meat_hud() {
     const auto display = ImGui::GetIO().DisplaySize;
     if (display.x <= 0 || display.y <= 0) return;
     const float scale = std::clamp(display.y / 1080.0f, 0.75f, 2.5f);
-    auto *draw = ImGui::GetForegroundDrawList();
+    auto *draw = ImGui::GetBackgroundDrawList();
     std::lock_guard lock(s.mutex);
-    if (s.tracker.phase() == Phase::bailing) draw_live(draw, s.tracker.live(), scale);
-    else if (clock_seconds() < s.result_until) draw_result(draw, s.tracker.result(), s.best, scale);
+    const double now = clock_seconds();
+    const bool live = s.tracker.phase() == Phase::bailing;
+    if (!live && now >= s.visible_until) return;
+    const Result &r = live ? s.tracker.live() : s.tracker.result();
+    float fade = 1.0f;
+    if (!live) fade = static_cast<float>(std::clamp((s.visible_until - now) / fade_seconds, 0.0, 1.0));
+    // The score counts up toward its target.
+    const float target = static_cast<float>(r.total);
+    s.shown_total += (target - s.shown_total) * std::min(1.0f, ImGui::GetIO().DeltaTime * 8.0f);
+    if (std::abs(target - s.shown_total) < 1.0f) s.shown_total = target;
+    draw_vignette(draw, display, fade * (live ? 1.0f : 0.6f));
+    draw_block(draw, r, s.shown_total, fade, scale, now, s.started);
 }
 } // namespace dingosdk::overlay
