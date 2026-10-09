@@ -401,8 +401,11 @@ void hall_of_meat_tick() {
     auto &s = state();
     const auto telemetry = trainer::telemetry();
     std::lock_guard lock(s.mutex);
-    if (!telemetry.skater) {
+    // Off while its asset mod is not installed or is turned off in the MODS tab.
+    if (!telemetry.skater || hom_directory().empty()) {
         if (s.tracker.phase() == Phase::bailing) s.tracker.reset();
+        s.visible_until = 0;
+        hall_of_meat::hide_game_ui().store(false);
         s.last_time = -1;
         return;
     }

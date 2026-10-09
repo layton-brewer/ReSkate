@@ -5,7 +5,6 @@
 #include "Extension/Skater/client_source_spawn_internal.h"
 #include "Engine/Game/Build/20260929/client_source_spawn.h"
 #include "Extension/Profile/local_profile_runtime.h"
-#include <filesystem>
 #include <Windows.h>
 #include <array>
 #include <chrono>
@@ -51,76 +50,6 @@ void phys_probe(std::uintptr_t base, std::uintptr_t client) {
     for (std::size_t i = 0; i < rig_bones && rig.valid; ++i)
         say(std::format("xray {:2}: a ({:.3f},{:.3f},{:.3f}) b ({:.3f},{:.3f},{:.3f})", i, rig.bones[i].a[0], rig.bones[i].a[1], rig.bones[i].a[2],
                         rig.bones[i].b[0], rig.bones[i].b[1], rig.bones[i].b[2]));
-}
-
-// Self-test, only when <game>/HallOfMeat/autotest.flag exists: once the skater has stood for a while,
-// log the physics bodies, lift the skater 18 m and let it fall, logging the bodies and the X-ray
-// bones through the crash. Lets the mod be checked without anyone at the controls.
-void dump_bodies(std::uintptr_t base, std::uintptr_t client, const char *tag) {
-    overlay::DebugModel skater;
-    (void)client_source::detail::debug_skater(base, client, skater);
-    const auto bodies = client_source::detail::debug_noclip_bodies(base, client, skater.skater_identity);
-    say(std::format("{} root ({:.3f},{:.3f},{:.3f}) offboard {} xray-from-bodies {}", tag, bodies.root[0], bodies.root[1], bodies.root[2], bodies.offboard, rig_from_bodies().load()));
-    for (std::size_t i = 9; i < bodies.parts.size(); ++i) {
-        std::array<float, 76> f{};
-        if (!first_person_read(bodies.parts[i], f.data(), sizeof(f))) continue;
-        std::string line = std::format("{} body {:2}:", tag, i - 8);
-        for (std::size_t k = 0; k < f.size(); ++k) {
-            if (!std::isfinite(f[k]) || std::abs(f[k]) > 1e7f || (std::abs(f[k]) < 1e-12f && f[k] != 0)) line += " *";
-            else line += std::format(" {:.3f}", f[k]);
-        }
-        say(line);
-    }
-    const auto rig = latest_rig(std::chrono::milliseconds(1000));
-    for (std::size_t i = 0; i < rig_bones && rig.valid; ++i)
-        say(std::format("{} xray {:2}: ({:.3f},{:.3f},{:.3f}) ({:.3f},{:.3f},{:.3f})", tag, i, rig.bones[i].a[0], rig.bones[i].a[1], rig.bones[i].a[2],
-                        rig.bones[i].b[0], rig.bones[i].b[1], rig.bones[i].b[2]));
-}
-std::atomic<bool> &autotest_hides_ui();
-struct AutoTest {
-    int phase{-1};
-    std::chrono::steady_clock::time_point since{}, last_dump{};
-    int dumps{};
-};
-void autotest_tick(std::uintptr_t base, std::uintptr_t client) {
-    static AutoTest t;
-    const auto now = std::chrono::steady_clock::now();
-    if (t.phase == -1) {
-        std::wstring path(32768, L'\0');
-        const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-        path.resize(length);
-        std::error_code error;
-        t.phase = std::filesystem::exists(std::filesystem::path(path).parent_path() / L"HallOfMeat" / L"autotest.flag", error) ? 0 : 99;
-        t.since = now;
-        if (t.phase == 0) say("AUTOTEST armed");
-        if (t.phase == 0) autotest_hides_ui().store(true);
-    }
-    if (t.phase == 99) return;
-    const auto rig = latest_rig();
-    if (t.phase == 0) {
-        if (!rig.valid) { t.since = now; return; }
-        if (now - t.since < std::chrono::milliseconds(1500)) return;
-        dump_bodies(base, client, "AT stand");
-        overlay::DebugModel skater;
-        (void)client_source::detail::debug_skater(base, client, skater);
-        const auto bodies = client_source::detail::debug_noclip_bodies(base, client, skater.skater_identity);
-        const bool sent = teleport_local_skater({bodies.root[0], bodies.root[1] + 25.0f, bodies.root[2]});
-        say(std::format("AUTOTEST lift sent {}", sent));
-        t.phase = 1;
-        t.since = now;
-        return;
-    }
-    if (t.phase == 1) {
-        const auto elapsed = std::chrono::duration<double>(now - t.since).count();
-        if (now - t.last_dump >= std::chrono::milliseconds(200)) {
-            t.last_dump = now;
-            dump_bodies(base, client, std::format("AT {:.2f}", elapsed).c_str());
-        }
-        if (elapsed > 10.0) {
-            say("AUTOTEST done");
-            t.phase = 2;
-        }
-    }
 }
 
 void probe(std::uintptr_t base, std::uintptr_t client) {
@@ -409,10 +338,6 @@ void publish_pose(std::uintptr_t base, std::uintptr_t holder, std::uintptr_t cli
 
 // The game's UI draw flag (what ReSkate's own `hideui` toggles): cleared while a bail is on
 // screen, put back afterwards unless someone else changed it meanwhile.
-std::atomic<bool> &autotest_hides_ui() {
-    static std::atomic<bool> value{};
-    return value;
-}
 struct UiHide {
     bool applied{};
     std::uintptr_t object{};
@@ -427,7 +352,7 @@ bool write_byte(std::uintptr_t address, std::uint8_t value) noexcept {
 }
 void apply_ui_hide(std::uintptr_t base) noexcept {
     static UiHide hide;
-    const bool want = hide_game_ui().load() || autotest_hides_ui().load();
+    const bool want = hide_game_ui().load();
     namespace spawn = addr::client_source_spawn;
     std::uintptr_t object{}, vtable{}, type{};
     if (!first_person_read(base + spawn::ui_settings, &object, 8) || !object || !first_person_read(object, &vtable, 8) ||
@@ -454,12 +379,6 @@ void rig_tick(std::uintptr_t base, std::uintptr_t client) noexcept {
     } catch (...) {
     }
     apply_ui_hide(base);
-    try {
-        autotest_tick(base, client);
-    } catch (const std::exception &error) {
-        say(std::string("AUTOTEST error: ") + error.what());
-    } catch (...) {
-    }
     if (phys_probe_requested().exchange(false)) {
         try {
             phys_probe(base, client);

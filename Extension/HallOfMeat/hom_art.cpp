@@ -1,5 +1,8 @@
 #include "hom_art.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Vfs/mod_list.h"
+#include <chrono>
+#include <mutex>
 #include <Windows.h>
 #include <filesystem>
 #include <map>
@@ -50,14 +53,47 @@ bool decode(const fs::path &path, Picture &picture) {
     return SUCCEEDED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(picture.rgba.size()), picture.rgba.data()));
 }
 
-fs::path hom_directory() {
+fs::path game_directory() {
     std::wstring path(32768, L'\0');
     const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (!length || length >= path.size()) return {};
     path.resize(length);
-    return fs::path(path).parent_path() / L"HallOfMeat";
+    return fs::path(path).parent_path();
 }
 } // namespace
+
+fs::path hom_directory() noexcept {
+    static std::mutex mutex;
+    static fs::path found;
+    static std::chrono::steady_clock::time_point next{};
+    std::lock_guard lock(mutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next) return found;
+    next = now + std::chrono::seconds(2);
+    try {
+        const auto game = game_directory();
+        fs::path result;
+        std::error_code error;
+        const auto list = mods::scan_mods(game);
+        if (list.issue.empty())
+            for (const auto &entry : list.entries) {
+                if (!entry.enabled || !entry.mod.outdated.empty()) continue;
+                const auto candidate = entry.mod.directory / L"HallOfMeat";
+                if (fs::is_regular_file(candidate / L"bones.bin", error)) {
+                    result = candidate;
+                    break;
+                }
+            }
+        // A mod installed by hand into a disabled slot does not count; the game folder copy is for development.
+        if (result.empty() && !game.empty() && fs::is_regular_file(game / L"HallOfMeat" / L"bones.bin", error)) result = game / L"HallOfMeat";
+        if (result != found)
+            logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: {}.",
+                         result.empty() ? std::string("assets not installed, off") : "assets in " + mods::ascii_path(result));
+        found = result;
+    } catch (...) {
+    }
+    return found;
+}
 
 std::size_t reserve_hom_art(ImFontAtlas &atlas) noexcept {
     try {

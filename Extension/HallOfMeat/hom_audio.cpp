@@ -1,4 +1,5 @@
 #include "hom_audio.h"
+#include "hom_art.h"
 #include "Engine/Core/Log/logging.h"
 #include <Windows.h>
 #include <xaudio2.h>
@@ -40,11 +41,8 @@ Player &player() {
 }
 
 fs::path sounds_directory() {
-    std::wstring path(32768, L'\0');
-    const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (!length || length >= path.size()) return {};
-    path.resize(length);
-    return fs::path(path).parent_path() / L"HallOfMeat" / L"sounds";
+    const auto root = overlay::hom_directory();
+    return root.empty() ? fs::path{} : root / L"sounds";
 }
 
 bool load_wav(const fs::path &path, Sound &out) {

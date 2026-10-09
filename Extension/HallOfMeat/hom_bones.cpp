@@ -95,11 +95,9 @@ const std::array<Bind, 19> &binds() {
 
 void load() {
     auto &lib = library();
-    std::wstring path(32768, L'\0');
-    const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    if (!length || length >= path.size()) return;
-    path.resize(length);
-    const auto file = fs::path(path).parent_path() / L"HallOfMeat" / L"bones.bin";
+    const auto root = overlay::hom_directory();
+    if (root.empty()) return;
+    const auto file = root / L"bones.bin";
     std::ifstream in(file, std::ios::binary);
     if (!in) return;
     const auto read = [&](void *out, std::size_t size) { return static_cast<bool>(in.read(static_cast<char *>(out), static_cast<std::streamsize>(size))); };

@@ -3,10 +3,17 @@
 #include <imgui.h>
 #include <string_view>
 
-// Hall Of Meat HUD art. ReSkate ships no game data: the PNGs are read from <game>/HallOfMeat/art
-// (built from the player's own Skate 3 by tools/HallOfMeat/build_assets.py) and packed into the
-// ImGui font atlas, like the chat emotes. Without them the HUD falls back to drawn shapes.
+#include <filesystem>
+
+// Hall Of Meat HUD art. ReSkate ships no game data: Skate 3's art, X-ray meshes and sounds come in a
+// mod (Mods/<mod>/HallOfMeat/, see hom_directory) and the PNGs are packed into the ImGui font atlas,
+// like the chat emotes.
 namespace dingosdk::overlay {
+// Where Hall Of Meat's assets are: the HallOfMeat folder of the first enabled mod that has one (its
+// bones.bin), else <game>/HallOfMeat. Empty when there is none, and then Hall Of Meat is off.
+// Rescans the Mods folder at most every two seconds, so turning the mod off in the MODS tab
+// switches Hall Of Meat off.
+std::filesystem::path hom_directory() noexcept;
 struct HomArt {
     ImTextureID texture{};
     ImVec2 uv0{}, uv1{};
