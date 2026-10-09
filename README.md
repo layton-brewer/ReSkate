@@ -2,9 +2,9 @@
 
 > **This fork adds Skate 3 Hall of Meat, the nostalgic one.** Skate 3's own X-ray bones, damage table,
 > score graphs, Thrasher panel, sounds, colour grade and film grain, on official ReSkate v2.0.1
-> (multiplayer works with everyone on 2.0.1). Downloads: [releases](https://github.com/layton-brewer/ReSkate/releases/latest).
+> (multiplayer works with everyone on 2.0.1). Downloads: [releases](https://github.com/layton-brewer/ReSkate-Skate3-Hall-Of-Meat/releases/latest).
 > Details and how it compares with ReSkate's built-in Hall of Meat:
-> [layton-brewer/ReSkate-Hall-Of-Meat](https://github.com/layton-brewer/ReSkate-Hall-Of-Meat). Code: `Extension/Skate3HallOfMeat/`.
+> [layton-brewer/Skate3-Hall-Of-Meat](https://github.com/layton-brewer/Skate3-Hall-Of-Meat). Code: `Extension/Skate3HallOfMeat/`.
 
 play it offline, host your own lobbies and dedicated servers, and mod it.
 the launcher, the runtime that loads into the game, and the dedicated server.
