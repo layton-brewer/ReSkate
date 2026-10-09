@@ -3,19 +3,57 @@
 #include <cmath>
 
 namespace dingosdk::hall_of_meat {
+const std::array<BodyPart, body_parts> &body_parts_table() {
+    // Copied from Skate 3's skatercollections database (the HoM scoring class's layout data): per
+    // part, its four links {part, share} and its six damage-level slots {points, impact}. Parts:
+    // 0 skull, 1 head joint, 2-5 and 6-9 the arms (hand, forearm, upper arm, shoulder), 10 chest,
+    // 11-13 the spine (ribs, middle, lower), 14-17 and 18-21 the legs (toes, foot, calf, thigh),
+    // 22 pelvis, 23 neck, 24 groin.
+    static const std::array<BodyPart, body_parts> table{{
+    {{{-1, 0.0f}, {-1, 0.0f}, {23, 0.0f}, {1, 0.5f}}, {{500, 7.0f}, {1000, 14.0f}, {0, 0.0f}, {0, 0.0f}, {5000, 21.0f}, {0, 0.0f}}}, // 0
+    {{{-1, 0.0f}, {-1, 0.0f}, {0, 0.125f}, {10, 0.5f}}, {{0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}}}, // 1
+    {{{-1, 0.0f}, {-1, 0.0f}, {3, 0.25f}, {-1, 0.0f}}, {{100, 6.0f}, {250, 9.0f}, {500, 12.0f}, {750, 15.0f}, {0, 0.0f}, {1000, 18.0f}}}, // 2
+    {{{-1, 0.0f}, {-1, 0.0f}, {4, 0.25f}, {2, 0.125f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {0, 0.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 3
+    {{{-1, 0.0f}, {5, 0.25f}, {-1, 0.0f}, {3, 0.125f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {750, 18.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 4
+    {{{4, 0.125f}, {10, 0.25f}, {-1, 0.0f}, {-1, 0.0f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {750, 18.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 5
+    {{{-1, 0.0f}, {-1, 0.0f}, {7, 0.25f}, {-1, 0.0f}}, {{100, 6.0f}, {250, 9.0f}, {500, 12.0f}, {750, 15.0f}, {0, 0.0f}, {1000, 18.0f}}}, // 6
+    {{{-1, 0.0f}, {-1, 0.0f}, {8, 0.25f}, {6, 0.125f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {0, 0.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 7
+    {{{9, 0.25f}, {-1, 0.0f}, {-1, 0.0f}, {7, 0.125f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {750, 18.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 8
+    {{{10, 0.25f}, {8, 0.125f}, {-1, 0.0f}, {-1, 0.0f}}, {{100, 9.0f}, {250, 12.0f}, {500, 15.0f}, {750, 18.0f}, {1000, 21.0f}, {0, 0.0f}}}, // 9
+    {{{5, 0.25f}, {9, 0.25f}, {1, 0.125f}, {11, 0.5f}}, {{0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}, {0, 0.0f}}}, // 10
+    {{{-1, 0.0f}, {-1, 0.0f}, {10, 0.0f}, {12, 0.25f}}, {{250, 7.0f}, {500, 10.0f}, {0, 0.0f}, {0, 0.0f}, {1000, 15.0f}, {2000, 25.0f}}}, // 11
+    {{{-1, 0.0f}, {-1, 0.0f}, {11, 0.25f}, {13, 0.25f}}, {{250, 7.0f}, {500, 10.0f}, {0, 0.0f}, {0, 0.0f}, {1000, 15.0f}, {2000, 25.0f}}}, // 12
+    {{{-1, 0.0f}, {-1, 0.0f}, {12, 0.25f}, {22, 0.25f}}, {{250, 7.0f}, {500, 10.0f}, {0, 0.0f}, {0, 0.0f}, {1000, 15.0f}, {2000, 25.0f}}}, // 13
+    {{{-1, 0.0f}, {15, 0.25f}, {-1, 0.0f}, {-1, 0.0f}}, {{100, 7.0f}, {250, 10.0f}, {0, 0.0f}, {500, 13.0f}, {750, 16.0f}, {1000, 19.0f}}}, // 14
+    {{{14, 0.125f}, {-1, 0.0f}, {16, 0.25f}, {-1, 0.0f}}, {{100, 7.0f}, {250, 10.0f}, {0, 0.0f}, {500, 16.0f}, {750, 19.0f}, {1000, 22.0f}}}, // 15
+    {{{-1, 0.0f}, {-1, 0.0f}, {17, 0.25f}, {15, 0.125f}}, {{100, 10.0f}, {250, 13.0f}, {500, 16.0f}, {750, 19.0f}, {1000, 22.0f}, {0, 0.0f}}}, // 16
+    {{{-1, 0.0f}, {22, 0.25f}, {-1, 0.0f}, {16, 0.125f}}, {{100, 10.0f}, {250, 13.0f}, {500, 16.0f}, {750, 19.0f}, {1000, 22.0f}, {0, 0.0f}}}, // 17
+    {{{19, 0.25f}, {-1, 0.0f}, {-1, 0.0f}, {-1, 0.0f}}, {{100, 7.0f}, {250, 10.0f}, {0, 0.0f}, {500, 13.0f}, {750, 16.0f}, {1000, 19.0f}}}, // 18
+    {{{-1, 0.0f}, {18, 0.125f}, {20, 0.25f}, {-1, 0.0f}}, {{100, 7.0f}, {250, 10.0f}, {500, 13.0f}, {750, 16.0f}, {0, 0.0f}, {1000, 22.0f}}}, // 19
+    {{{-1, 0.0f}, {-1, 0.0f}, {21, 0.25f}, {19, 0.125f}}, {{100, 10.0f}, {250, 13.0f}, {500, 16.0f}, {750, 19.0f}, {1000, 22.0f}, {0, 0.0f}}}, // 20
+    {{{22, 0.25f}, {-1, 0.0f}, {-1, 0.0f}, {20, 0.125f}}, {{100, 10.0f}, {250, 16.0f}, {500, 16.0f}, {750, 19.0f}, {1000, 22.0f}, {0, 0.0f}}}, // 21
+    {{{17, 0.25f}, {21, 0.25f}, {13, 0.25f}, {24, 0.0f}}, {{250, 7.0f}, {500, 10.0f}, {0, 0.0f}, {750, 16.0f}, {1000, 19.0f}, {2000, 25.0f}}}, // 22
+    {{{-1, 0.0f}, {-1, 0.0f}, {-1, 0.0f}, {0, 1.0f}}, {{500, 6.0f}, {1000, 12.0f}, {0, 0.0f}, {0, 0.0f}, {5000, 20.0f}, {0, 0.0f}}}, // 23
+    {{{-1, 0.0f}, {-1, 0.0f}, {22, 1.0f}, {-1, 0.0f}}, {{1000, 3.0f}, {2500, 5.0f}, {5000, 7.0f}, {0, 0.0f}, {10000, 14.0f}, {0, 0.0f}}}, // 24
+    }};
+    return table;
+}
+
+int level_count(std::size_t part) {
+    int n = 0;
+    for (const auto &l : body_parts_table()[part].levels) n += l.points > 0;
+    return n;
+}
+
 const std::vector<Bone> &bones() {
-    // The 19 bones of the original's X-ray skeleton (Skate 3 `dem_bones_hom`), in hom_rig.h order.
+    // The 19 bones of the original's X-ray skeleton (Skate 3 `dem_bones_hom`), in hom_rig.h order,
+    // with the body part each shows and the sound material Skate 3 gives it (aud_material hom_*).
     static const std::vector<Bone> list{
-        {"Skull", "Head", 0.35f, 5},          {"Neck", "Spine", 0.2f, 2},
-        {"Rib Cage", "Torso", 0.55f, 7},      {"Lower Spine", "Spine", 0.3f, 4},
-        {"Hips", "Torso", 0.35f, 5},          {"Left Bicep", "Arm", 0.45f, 5},
-        {"Right Bicep", "Arm", 0.45f, 5},     {"Left Forearm", "Arm", 0.55f, 6},
-        {"Right Forearm", "Arm", 0.55f, 6},   {"Left Hand", "Arm", 0.7f, 7},
-        {"Right Hand", "Arm", 0.7f, 7},       {"Left Thigh", "Leg", 0.25f, 4},
-        {"Right Thigh", "Leg", 0.25f, 4},     {"Left Calf", "Leg", 0.45f, 5},
-        {"Right Calf", "Leg", 0.45f, 5},      {"Left Ankle", "Leg", 0.65f, 6},
-        {"Right Ankle", "Leg", 0.65f, 6},     {"Left Toes", "Leg", 0.75f, 6},
-        {"Right Toes", "Leg", 0.75f, 6},
+        {"Skull", "head", 0},        {"Neck", "head", 23},         {"Rib Cage", "torso", 11},   {"Lower Spine", "torso", 13},
+        {"Hips", "torso", 22},       {"Left Bicep", "arm", 4},     {"Right Bicep", "arm", 8},   {"Left Forearm", "arm", 3},
+        {"Right Forearm", "arm", 7}, {"Left Hand", "arm", 2},      {"Right Hand", "arm", 6},    {"Left Thigh", "leg", 17},
+        {"Right Thigh", "leg", 21},  {"Left Calf", "leg", 16},     {"Right Calf", "leg", 20},   {"Left Ankle", "foot", 15},
+        {"Right Ankle", "foot", 19}, {"Left Toes", "foot", 14},    {"Right Toes", "foot", 18},
     };
     return list;
 }
@@ -38,6 +76,27 @@ float dist(const std::array<float, 3> &a, const std::array<float, 3> &b) {
 // Skate 3's homscoring.apt shows a metric row once its points pass the screen's threshold (speed,
 // drop and bail time 1, air 5) or once the game flags the metric; rotation, which seldom pays, shows
 // on the flag alone (the original reads "79°" with no points).
+int metric_points(int metric, float value) {
+    // Skate 3's score graphs (eight points each, from the same layout data). Checked against the
+    // original's HUD: 7.10 s of bail read 7,750, 31.5 m of drop 5,740, 65.5 km/h 6,383.
+    struct Graph {
+        float x[8], y[8];
+    };
+    static const Graph graphs[5]{
+        {{0, 719.9f, 720, 1080, 1800, 2520, 3240, 3500}, {0, 0, 750, 1250, 2500, 5000, 10000, 15000}}, // rotation, degrees
+        {{0, 1.49999f, 1.5f, 2, 2.5f, 3, 3.1f, 3.4f}, {0, 0, 750, 1250, 2500, 5000, 10000, 10000}},   // air, seconds
+        {{0, 6.99999f, 7, 10.5f, 17.5f, 30, 40, 45}, {0, 0, 750, 1250, 2500, 5000, 10000, 10000}},    // drop, metres
+        {{0, 4.999f, 5, 5.25f, 5.5f, 6, 8, 9}, {0, 0, 750, 1250, 2500, 5000, 10000, 15000}},          // bail time, seconds
+        {{0, 9.9999f, 10, 12.5f, 17.5f, 20, 45, 50}, {0, 0, 750, 2500, 5000, 10000, 10000, 10000}},   // speed, m/s
+    };
+    if (metric < 0 || metric > 4 || !(value > 0)) return 0;
+    const auto &g = graphs[metric];
+    if (value >= g.x[7]) return static_cast<int>(g.y[7]);
+    for (int k = 1; k < 8; ++k)
+        if (value < g.x[k]) return static_cast<int>(g.y[k - 1] + (g.y[k] - g.y[k - 1]) * (value - g.x[k - 1]) / (g.x[k] - g.x[k - 1]));
+    return static_cast<int>(g.y[7]);
+}
+
 bool metric_visible(const Result &r, int metric) {
     switch (metric) {
     case 0: return r.rotation >= 1.0f;
@@ -97,56 +156,82 @@ void Tracker::track_bones(const Sample &previous, const Sample &now, double dt) 
     hips_vertical_ += (vertical - hips_vertical_) * std::min(1.0f, static_cast<float>(dt) * 8.0f);
 }
 
-// During a bail: a bone breaks when its own middle took a hard enough hit (sturdy bones need more).
+// A hit on a body part: it reaches every damage level whose impact the hit meets, and each part
+// linked to it takes its share of the hit (Skate 3's propagation, one step).
+void Tracker::hit_part(int part, float impact, double time) {
+    const auto &table = body_parts_table();
+    const auto apply = [&](int p, float x) {
+        std::array<float, 6> needed{};
+        int n = 0, reached = 0;
+        for (const auto &l : table[p].levels)
+            if (l.points > 0) needed[n++] = l.impact;
+        std::sort(needed.begin(), needed.begin() + n);
+        for (int k = 0; k < n; ++k)
+            if (x >= needed[k]) reached = k + 1;
+        if (reached <= live_.level[p]) return;
+        live_.level[p] = reached;
+        live_.events.push_back({p, reached, reached == n, x, time});
+    };
+    if (part < 0 || part >= static_cast<int>(body_parts) || impact <= 0) return;
+    apply(part, impact);
+    for (int p = 0; p < static_cast<int>(body_parts); ++p)
+        for (const auto &link : table[p].links)
+            if (link.part == part && link.weight > 0) apply(p, impact * link.weight);
+    // The X-ray's view of it.
+    const auto &list = bones();
+    for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
+        const int n = level_count(static_cast<std::size_t>(list[i].part));
+        const int l = live_.level[static_cast<std::size_t>(list[i].part)];
+        live_.damage[i] = n ? static_cast<float>(l) / static_cast<float>(n) : 0.0f;
+        if (n && l == n && !is_broken_[i]) {
+            is_broken_[i] = true;
+            live_.broken.push_back({i, impact, time});
+        }
+    }
+}
+
+// During a bail: each X-ray bone's own hit lands on its body part.
 void Tracker::apply_bone_hits(const Sample &now) {
     if (now.time - start_.time < 0.15) return; // the wipeout's own first jolt
     const auto &list = bones();
     for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
         const float change = bone_change_[i];
         if (change <= 0) continue;
-        const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
-        live_.damage[i] = std::max(live_.damage[i], change / needed);
-        if (change >= needed && !is_broken_[i]) {
-            is_broken_[i] = true;
-            live_.broken.push_back({i, change, now.time});
-            live_.biggest_hit = std::max(live_.biggest_hit, change);
-        }
+        live_.biggest_hit = std::max(live_.biggest_hit, change);
+        hit_part(list[i].part, change, now.time);
     }
 }
 
+// Without the skeleton: a sudden loss of speed lands on a few random parts.
 void Tracker::register_impact(float drop) {
     ++live_.impacts;
     live_.biggest_hit = std::max(live_.biggest_hit, drop);
     const auto &list = bones();
-    float total_weight = 0;
-    for (const auto &b : list) total_weight += b.weight;
-    // Harder hits strike more bones.
     const int strikes = std::clamp(static_cast<int>(drop / 3.0f), 1, 6);
     for (int i = 0; i < strikes; ++i) {
-        float pick = unit(rng_) * total_weight;
-        std::size_t index = 0;
-        for (; index + 1 < list.size(); ++index) {
-            if (pick < list[index].weight) break;
-            pick -= list[index].weight;
-        }
-        if (is_broken_[index]) continue;
-        const float chance = std::clamp((drop - 3.0f) / 14.0f, 0.08f, 0.97f) * (0.35f + list[index].fragility);
-        if (unit(rng_) < chance) {
-            is_broken_[index] = true;
-            live_.damage[index] = std::max(live_.damage[index], 1.0f);
-            live_.broken.push_back({index, drop, previous_.time});
-        }
+        const auto index = std::min(list.size() - 1, static_cast<std::size_t>(unit(rng_) * static_cast<float>(list.size())));
+        hit_part(list[index].part, drop * (0.6f + 0.8f * unit(rng_)), previous_.time);
     }
 }
 
 void Tracker::score(Result &r) const {
-    r.bone_points = config_.bone_value * static_cast<int>(r.broken.size());
-    const auto cap = [&](float value) { return std::min(config_.metric_cap, static_cast<int>(std::max(0.0f, value))); };
-    r.air_points = cap(r.air_time * config_.air_scale);
-    r.drop_points = cap(r.drop * config_.drop_scale);
-    r.duration_points = static_cast<int>(std::max(0.0f, r.duration - config_.duration_start) * config_.duration_scale);
-    r.speed_points = cap((r.peak_speed * 3.6f - config_.speed_start) * config_.speed_scale);
-    r.rotation_points = static_cast<int>(r.rotation * config_.rotation_scale);
+    // Every damaged part pays the points of the highest level it reached.
+    r.bone_points = 0;
+    const auto &table = body_parts_table();
+    for (std::size_t p = 0; p < body_parts; ++p) {
+        if (r.level[p] <= 0) continue;
+        std::array<DamageLevel, 6> sorted{};
+        std::copy(std::begin(table[p].levels), std::end(table[p].levels), sorted.begin());
+        std::sort(sorted.begin(), sorted.end(), [](const DamageLevel &a, const DamageLevel &b) {
+            return (a.points > 0) != (b.points > 0) ? a.points > 0 : a.impact < b.impact;
+        });
+        r.bone_points += sorted[static_cast<std::size_t>(r.level[p] - 1)].points;
+    }
+    r.rotation_points = metric_points(0, r.rotation);
+    r.air_points = metric_points(1, r.air_time);
+    r.drop_points = metric_points(2, r.drop);
+    r.duration_points = metric_points(3, r.duration);
+    r.speed_points = metric_points(4, r.peak_speed);
     r.total = r.bone_points + r.air_points + r.drop_points + r.duration_points + r.speed_points + r.rotation_points;
     r.title = title_for(r.total, r.broken.size());
 }
@@ -224,13 +309,8 @@ bool Tracker::update(const Sample &s) {
                 const auto &list = bones();
                 for (std::size_t i = 0; i < list.size() && i < 19; ++i) {
                     if (s.time - recent_hit_time_[i] > 3.0 || recent_hit_[i] <= 0) continue;
-                    const float needed = config_.bone_break_speed * (1.35f - list[i].fragility);
-                    live_.damage[i] = std::max(live_.damage[i], recent_hit_[i] / needed);
-                    if (recent_hit_[i] >= needed && !is_broken_[i]) {
-                        is_broken_[i] = true;
-                        live_.broken.push_back({i, recent_hit_[i], recent_hit_time_[i]});
-                        live_.biggest_hit = std::max(live_.biggest_hit, recent_hit_[i]);
-                    }
+                    live_.biggest_hit = std::max(live_.biggest_hit, recent_hit_[i]);
+                    hit_part(list[i].part, recent_hit_[i], recent_hit_time_[i]);
                 }
             }
             recent_hit_ = {};

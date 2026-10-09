@@ -1,5 +1,6 @@
 #include "hall_of_meat_hud.h"
 #include "hom_art.h"
+#include "hom_audio.h"
 #include "hom_bones.h"
 #include "hom_core.h"
 #include "hom_rig.h"
@@ -45,6 +46,8 @@ struct State {
     double last_time{-1};
     double heartbeat{};
     float darkness{};
+    std::uint32_t sounded_serial{};
+    std::size_t sounded{}; // damage events of the live bail already heard
 };
 State &state() {
     static State value;
@@ -176,7 +179,7 @@ void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade
     }
 
     // The bone chip on top: icon, count, points.
-    if (!r.broken.empty()) {
+    if (r.bone_points > 0) {
         const float chip_h = row_h * 0.9f;
         const ImVec2 a0(left + slide, y + (row_h - chip_h) * 0.5f);
         draw->AddRectFilled(a0, ImVec2(left + 112.0f * scale + slide, a0.y + chip_h), alpha(chip_blue, a), 3.0f * scale);
@@ -352,6 +355,14 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
         if (projector.project(middle, at, spot_depth)) spot = at;
     }
     draw_grade(draw, spot, darkness * fade);
+    {
+        // A break flashes the picture with the tint of Skate 3's hom_slomo_effect (0.4, 0.2, 0.2).
+        double last_break = -1;
+        for (const auto &b : r.broken) last_break = std::max(last_break, b.time);
+        const float since = last_break < 0 ? 1e9f : static_cast<float>(clock_seconds() - last_break);
+        if (since >= 0 && since < 0.8f)
+            draw->AddRectFilled(ImVec2(0, 0), display, IM_COL32(102, 51, 51, static_cast<int>(0.2f * (1.0f - since / 0.8f) * fade * 255.0f)));
+    }
     draw_grain(draw, 0.13f * darkness * fade);
     if (!camera) return;
     std::array<bool, hall_of_meat::rig_bones> broken{};
@@ -362,7 +373,7 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
     for (int pass = 0; pass < 2; ++pass)
         for (std::size_t i = 0; i < hall_of_meat::rig_bones; ++i) {
             const float damage = r.damage[i];
-            if (!broken[i] && damage < 0.5f) continue;
+            if (!broken[i] && damage <= 0.0f) continue;
             if (broken[i] != (pass == 1)) continue;
             const auto &seg = rig.bones[i];
             if (!meshes) {
@@ -373,7 +384,8 @@ void draw_xray(ImDrawList *draw, const Result &r, double, float fade, float dark
                 draw_bone(draw, i, a, b, px, broken[i], 1.0f, fade);
                 continue;
             }
-            const float strength = broken[i] ? 1.0f : std::clamp((damage - 0.5f) * 2.0f + 0.4f, 0.4f, 1.0f);
+            // Bruised up to dislocated shows faint to full; broken in the fracture colours.
+            const float strength = broken[i] ? 1.0f : std::clamp(0.35f + 0.65f * damage, 0.35f, 1.0f);
             // Skate 3's colours, measured from the original: hurt (223, 212, 214), broken (198, 87, 64),
             // fracture (158, 43, 23), after its bone map; these tints give those through the map.
             const ImU32 tint = broken[i] ? IM_COL32(235, 103, 75, 255) : IM_COL32(255, 244, 246, 255);
@@ -439,6 +451,19 @@ void hall_of_meat_tick() {
                          rig.bones[4].a[0], rig.bones[4].a[1], rig.bones[4].a[2]);
         else
             logging::log(logging::Level::info, logging::Channel::assets, "Hall Of Meat: skeleton not readable at bail start.");
+    }
+    {
+        // Each new damage level is heard, as Skate 3 plays its HoM bone sounds.
+        const Result &r = s.tracker.phase() == Phase::bailing ? s.tracker.live() : s.tracker.result();
+        if (r.serial != s.sounded_serial) {
+            s.sounded_serial = r.serial;
+            s.sounded = 0;
+        }
+        for (; s.sounded < r.events.size(); ++s.sounded) {
+            const auto &e = r.events[s.sounded];
+            const int n = std::max(1, level_count(static_cast<std::size_t>(e.part)));
+            hall_of_meat::play_bone_sound(static_cast<float>(e.level) / static_cast<float>(n), e.top);
+        }
     }
     if (done) {
         const auto &r = s.tracker.result();

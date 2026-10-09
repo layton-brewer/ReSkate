@@ -25,11 +25,31 @@ struct Sample {
     std::array<std::array<float, 3>, 19> bone_centres{};
 };
 
+// Skate 3's own HoM damage model (Sk8::Score::HoM in its attribute database): 25 body parts, each
+// with up to six damage levels (bruised up to broken), each worth points once a hit reaches its
+// impact, and links through which a part takes a share of a neighbour's hit.
+inline constexpr std::size_t body_parts = 25;
+struct DamageLevel {
+    int points;
+    float impact; // m/s a hit must reach
+};
+struct BodyLink {
+    int part;     // -1: none
+    float weight; // share of that part's hit this one takes
+};
+struct BodyPart {
+    BodyLink links[4];
+    DamageLevel levels[6]; // unused slots are {0, 0}
+};
+const std::array<BodyPart, body_parts> &body_parts_table();
+// Number of real damage levels of a part (its top one is a break).
+int level_count(std::size_t part);
+
+// The 19 bones of the X-ray, each drawn for one body part.
 struct Bone {
     const char *name;
-    const char *region;
-    float fragility; // 0..1, how readily it breaks
-    float weight;    // how likely an impact is to land on it
+    const char *region; // Skate 3's sound material: head, torso, arm, leg, foot
+    int part;           // index in body_parts_table()
 };
 const std::vector<Bone> &bones();
 
@@ -38,12 +58,22 @@ struct BrokenBone {
     float impact{}; // m/s of speed lost in the hit that broke it
     double time{};  // when it broke (Sample::time)
 };
+// A body part reaching a new damage level, for the sound of it.
+struct DamageEvent {
+    int part{};
+    int level{}; // 1..level_count(part)
+    bool top{};  // broken
+    float impact{};
+    double time{};
+};
 
 struct Result {
     std::uint32_t serial{};
     std::vector<BrokenBone> broken;
-    // Worst hit each bone took, as a share of what breaks it (1 = broken). The X-ray shows bones past ~0.5.
+    // Each X-ray bone's damage level as a share of its top one (1 = broken; 0 = untouched).
     std::array<float, 19> damage{};
+    std::array<int, body_parts> level{}; // damage level reached by each body part
+    std::vector<DamageEvent> events;
     int impacts{};
     float distance{};    // metres from where the bail began
     float peak_speed{};  // m/s
@@ -67,7 +97,6 @@ bool metric_visible(const Result &r, int metric);
 struct Config {
     std::uint32_t wipeout_state = 300; // physics state that starts a bail
     float impact_threshold = 3.5f;     // m/s lost between two ticks to count as a hit
-    float bone_break_speed = 11.0f;     // m/s a bone's middle must lose at once to break (scaled by fragility)
     float hit_torso = 3.5f;             // m/s the chest or hips lose in ~0.13 s: the body hit something
     float hit_any = 9.0f;               // or any bone does (a limb slammed hard)
     float down_time = 0.30f;            // seconds the body must be lying for an off-board bail
@@ -77,18 +106,11 @@ struct Config {
     float settle_time = 1.0f;
     float min_duration = 0.4f; // shorter wipeouts are not worth scoring
     float max_duration = 30.0f;
-    // Calibrated against the original's HUD (video): air 6.4 s and drops past ~52 m both read 10,000;
-    // a 7.10 s bail read 7,750 and 8.26 s read 11,333; 36 km/h read 785.
-    float air_scale = 1850.0f; // points per second of air, capped at metric_cap
-    float drop_scale = 182.0f; // points per metre dropped, capped (31.5 m read 5,740)
-    float duration_scale = 3089.0f;
-    float duration_start = 4.59f; // seconds before a bail starts paying
-    float speed_scale = 190.0f;   // points per km/h of peak speed past speed_start (65.5 km/h read 6,383)
-    float speed_start = 31.9f;    // km/h before speed pays (36 km/h read 785)
-    int bone_value = 500;         // every broken bone (the chip read x1 500, x2 1,000)
-    float rotation_scale = 5.0f;  // points per degree turned
-    int metric_cap = 10000;
+    // The metrics pay by Skate 3's own score graphs (metric_points in hom_core.cpp).
 };
+// Points for a metric by Skate 3's score graph (0 rotation degrees, 1 air seconds, 2 drop metres,
+// 3 bail seconds, 4 speed m/s).
+int metric_points(int metric, float value);
 
 enum class Phase { idle, bailing, finished };
 
@@ -108,6 +130,7 @@ public:
 private:
     void score(Result &r) const;
     void register_impact(float drop);
+    void hit_part(int part, float impact, double time);
     Config config_;
     Phase phase_{Phase::idle};
     Result live_{}, last_{};
