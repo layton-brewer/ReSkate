@@ -181,7 +181,9 @@ void draw_block(ImDrawList *draw, const Result &r, float total_shown, float fade
         const ImVec2 a0(left + slide, y + (row_h - chip_h) * 0.5f);
         draw->AddRectFilled(a0, ImVec2(left + 112.0f * scale + slide, a0.y + chip_h), alpha(chip_blue, a), 3.0f * scale);
         if (has_art("bones")) image(draw, "bones", ImVec2(a0.x + 4.0f * scale, a0.y + 3.0f * scale), ImVec2(a0.x + chip_h - 3.0f * scale, a0.y + chip_h - 3.0f * scale), alpha(IM_COL32_WHITE, a));
-        shadowed(draw, font, 22.0f * scale, ImVec2(a0.x + chip_h + 4.0f * scale, a0.y + 4.0f * scale), alpha(white, a), std::format("x{}", r.broken.size()));
+        // As homscoring.apt's UpdateBonus: the count reads "x2" and up, a single one shows no count.
+        if (r.broken.size() >= 2)
+            shadowed(draw, font, 22.0f * scale, ImVec2(a0.x + chip_h + 4.0f * scale, a0.y + 4.0f * scale), alpha(white, a), std::format("x{}", r.broken.size()));
         shadowed(draw, font, text_size, ImVec2(left + 122.0f * scale + slide, a0.y + 2.0f * scale), alpha(white, a), with_commas(r.bone_points));
     }
 }

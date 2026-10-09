@@ -35,13 +35,16 @@ float dist(const std::array<float, 3> &a, const std::array<float, 3> &b) {
 }
 } // namespace
 
+// Skate 3's homscoring.apt shows a metric row once its points pass the screen's threshold (speed,
+// drop and bail time 1, air 5) or once the game flags the metric; rotation, which seldom pays, shows
+// on the flag alone (the original reads "79°" with no points).
 bool metric_visible(const Result &r, int metric) {
     switch (metric) {
     case 0: return r.rotation >= 1.0f;
-    case 1: return r.air_time >= 0.1f;
-    case 2: return r.drop >= 0.5f;
-    case 3: return r.duration_points > 0;
-    case 4: return r.speed_points > 0;
+    case 1: return r.air_points > 5;
+    case 2: return r.drop_points > 1;
+    case 3: return r.duration_points > 1;
+    case 4: return r.speed_points > 1;
     }
     return false;
 }
