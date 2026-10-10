@@ -1,8 +1,8 @@
 # ReSkate
 
 > **This fork adds the Hall of Meat to Skate 4 (skate.): the nostalgic one, straight from Skate 3.** Skate 3's own X-ray bones, damage table,
-> score graphs, Thrasher panel, sounds, colour grade and film grain, on official ReSkate v2.0.1
-> (multiplayer works with everyone on 2.0.1). Downloads: [releases](https://github.com/layton-brewer/ReSkate-Hall-Of-Meat/releases/latest).
+> score graphs, Thrasher panel, sounds, colour grade and film grain, on official ReSkate v2.0.2
+> (multiplayer works with everyone on 2.0.2). Downloads: [releases](https://github.com/layton-brewer/ReSkate-Hall-Of-Meat/releases/latest).
 > Details and how it compares with ReSkate's built-in Hall of Meat:
 > [layton-brewer/Hall-Of-Meat-for-Skate-4](https://github.com/layton-brewer/Hall-Of-Meat-for-Skate-4). Code: `Extension/Skate3HallOfMeat/`.
 
